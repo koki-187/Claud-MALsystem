@@ -1,0 +1,168 @@
+// MAL System - Type Definitions v5.0
+
+export type PrefectureCode =
+  | '01' | '02' | '03' | '04' | '05' | '06' | '07' | '08' | '09' | '10'
+  | '11' | '12' | '13' | '14' | '15' | '16' | '17' | '18' | '19' | '20'
+  | '21' | '22' | '23' | '24' | '25' | '26' | '27' | '28' | '29' | '30'
+  | '31' | '32' | '33' | '34' | '35' | '36' | '37' | '38' | '39' | '40'
+  | '41' | '42' | '43' | '44' | '45' | '46' | '47';
+
+export const PREFECTURES: Record<PrefectureCode, string> = {
+  '01': '北海道', '02': '青森県', '03': '岩手県', '04': '宮城県', '05': '秋田県',
+  '06': '山形県', '07': '福島県', '08': '茨城県', '09': '栃木県', '10': '群馬県',
+  '11': '埼玉県', '12': '千葉県', '13': '東京都', '14': '神奈川県', '15': '新潟県',
+  '16': '富山県', '17': '石川県', '18': '福井県', '19': '山梨県', '20': '長野県',
+  '21': '岐阜県', '22': '静岡県', '23': '愛知県', '24': '三重県', '25': '滋賀県',
+  '26': '京都府', '27': '大阪府', '28': '兵庫県', '29': '奈良県', '30': '和歌山県',
+  '31': '鳥取県', '32': '島根県', '33': '岡山県', '34': '広島県', '35': '山口県',
+  '36': '徳島県', '37': '香川県', '38': '愛媛県', '39': '高知県', '40': '福岡県',
+  '41': '佐賀県', '42': '長崎県', '43': '熊本県', '44': '大分県', '45': '宮崎県',
+  '46': '鹿児島県', '47': '沖縄県',
+};
+
+export type SiteId = 'suumo' | 'homes' | 'athome' | 'fudosan' | 'chintai' | 'smaity' | 'reins';
+
+export interface SiteConfig {
+  id: SiteId;
+  name: string;
+  url: string;
+  logo: string;
+  color: string;
+  rateLimit: number; // requests per minute
+}
+
+export const SITES: Record<SiteId, SiteConfig> = {
+  suumo:   { id: 'suumo',   name: 'SUUMO',       url: 'https://suumo.jp',         logo: '🏠', color: '#00A960', rateLimit: 10 },
+  homes:   { id: 'homes',   name: "HOME'S",      url: 'https://www.homes.co.jp',  logo: '🏡', color: '#FF6B35', rateLimit: 10 },
+  athome:  { id: 'athome',  name: 'AtHome',      url: 'https://www.athome.co.jp', logo: '🏘', color: '#0066CC', rateLimit: 10 },
+  fudosan: { id: 'fudosan', name: '不動産Japan',  url: 'https://fudosan.jp',       logo: '🏗', color: '#E74C3C', rateLimit: 8  },
+  chintai: { id: 'chintai', name: 'CHINTAI',     url: 'https://chintai.net',      logo: '🏢', color: '#9B59B6', rateLimit: 8  },
+  smaity:  { id: 'smaity',  name: 'Smaity',      url: 'https://smaity.com',       logo: '🏬', color: '#F39C12', rateLimit: 6  },
+  reins:   { id: 'reins',   name: 'REINS',       url: 'https://www.reins.or.jp',  logo: '📋', color: '#2ECC71', rateLimit: 5  },
+};
+
+export type PropertyType =
+  | 'mansion'
+  | 'kodate'
+  | 'tochi'
+  | 'chintai_mansion'
+  | 'chintai_ikkodate'
+  | 'jimusho'
+  | 'other';
+
+export interface Property {
+  id: string;
+  siteId: SiteId;
+  sitePropertyId: string;
+  title: string;
+  propertyType: PropertyType;
+  prefecture: PrefectureCode;
+  city: string;
+  address: string | null;
+  price: number | null;       // 万円
+  priceText: string;
+  area: number | null;        // m²
+  buildingArea: number | null; // m²
+  landArea: number | null;    // m²
+  rooms: string | null;       // e.g. "3LDK"
+  age: number | null;         // 築年数
+  floor: number | null;
+  totalFloors: number | null;
+  station: string | null;
+  stationMinutes: number | null;
+  images: string[];
+  thumbnailUrl: string | null;
+  detailUrl: string;
+  description: string | null;
+  features: string[];
+  latitude: number | null;
+  longitude: number | null;
+  priceHistory: PriceHistoryEntry[];
+  createdAt: string;
+  updatedAt: string;
+  scrapedAt: string;
+}
+
+export interface PriceHistoryEntry {
+  date: string;
+  price: number;
+}
+
+export interface SearchParams {
+  query?: string;
+  prefecture?: PrefectureCode;
+  city?: string;
+  propertyType?: PropertyType;
+  priceMin?: number;
+  priceMax?: number;
+  areaMin?: number;
+  areaMax?: number;
+  rooms?: string;
+  ageMax?: number;
+  stationMinutes?: number;
+  sites?: SiteId[];
+  sortBy?: 'price_asc' | 'price_desc' | 'area_asc' | 'area_desc' | 'newest' | 'relevance';
+  page?: number;
+  limit?: number;
+}
+
+export interface SearchResult {
+  properties: Property[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  sites: SiteSearchResult[];
+  executionTimeMs: number;
+  cacheHit: boolean;
+}
+
+export interface SiteSearchResult {
+  siteId: SiteId;
+  count: number;
+  status: 'success' | 'error' | 'timeout' | 'cached';
+  errorMessage?: string;
+  executionTimeMs: number;
+}
+
+export interface ScrapeJob {
+  id: string;
+  siteId: SiteId;
+  prefecture: PrefectureCode;
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  propertiesFound: number;
+  propertiesNew: number;
+  errorMessage?: string;
+  startedAt: string;
+  completedAt?: string;
+}
+
+export interface PricePrediction {
+  propertyId: string;
+  predictedPrice: number;
+  confidence: number;
+  factors: PriceFactor[];
+  predictedAt: string;
+}
+
+export interface PriceFactor {
+  name: string;
+  impact: number; // -1 to 1
+  description: string;
+}
+
+export interface Bindings {
+  MAL_DB: D1Database;
+  MAL_CACHE: KVNamespace;
+  MAL_STORAGE: R2Bucket;
+  ENVIRONMENT: string;
+  APP_VERSION: string;
+  MAX_RESULTS_PER_SITE: string;
+  CACHE_TTL_SECONDS: string;
+  RATE_LIMIT_PER_MINUTE: string;
+}
+
+export interface AppVariables {
+  userId?: string;
+  requestId: string;
+}
