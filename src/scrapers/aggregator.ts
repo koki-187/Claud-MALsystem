@@ -83,8 +83,10 @@ export async function aggregateSearch(
       allProperties.push(...result.value.properties);
       siteResults.push(result.value.result);
     } else {
+      // Promise.allSettled rejection is extremely rare (inner try/catch handles most cases)
+      // siteId cannot be determined from a rejected promise at this level
       siteResults.push({
-        siteId: 'suumo',
+        siteId: siteIds[siteResults.length] ?? ('suumo' as SiteId),
         count: 0,
         status: 'error',
         errorMessage: result.reason?.message ?? 'Unknown error',

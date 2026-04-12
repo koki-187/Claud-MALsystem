@@ -4,7 +4,7 @@ import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 import { timing } from 'hono/timing';
 import type { Bindings, AppVariables } from './types';
-import { searchProperties, getPropertyById, getStats } from './db/queries';
+import { searchProperties, getPropertyById, getStats, logSearch } from './db/queries';
 import { aggregateSearch } from './scrapers/aggregator';
 import { PREFECTURES, SITES } from './types';
 
@@ -83,6 +83,8 @@ app.get('/api/search', async (c) => {
     };
 
     await c.env.MAL_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 3600 }).catch(() => {});
+    // Log search for analytics (fire-and-forget)
+    logSearch(c.env.MAL_DB, params, result.total, result.executionTimeMs).catch(() => {});
     return c.json(result);
   } catch (error) {
     return c.json({ error: 'Search failed', message: String(error) }, 500);
@@ -655,7 +657,7 @@ function renderPropertyCard(p) {
   const prefName = PREFECTURES_DATA[p.prefecture] || '';
 
   const imgHtml = p.thumbnailUrl
-    ? '<img src="' + p.thumbnailUrl + '" alt="' + escHtml(p.title) + '" class="w-full h-full object-cover" loading="lazy" onerror="this.parentElement.innerHTML=\'<div class=\\'w-full h-full flex items-center justify-center text-5xl\\'>&#x1F3E0;</div>\'">'
+    ? '<img src="' + escAttr(p.thumbnailUrl) + '" alt="' + escHtml(p.title) + '" class="w-full h-full object-cover" loading="lazy" onerror="this.parentElement.innerHTML=\'<div class=\\'w-full h-full flex items-center justify-center text-5xl\\'>&#x1F3E0;</div>\'">'
     : '<div class="w-full h-full flex items-center justify-center text-5xl">' + (site.logo || '🏠') + '</div>';
 
   const stationHtml = p.station
