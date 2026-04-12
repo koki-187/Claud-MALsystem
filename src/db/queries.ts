@@ -13,6 +13,13 @@ export async function searchProperties(
   const whereClauses: string[] = [];
   const bindings: (string | number)[] = [];
 
+  // By default, only show active properties
+  const statusFilter = params.status === 'all' ? undefined : (params.status ?? 'active');
+  if (statusFilter) {
+    whereClauses.push('p.status = ?');
+    bindings.push(statusFilter);
+  }
+
   if (params.prefecture) {
     whereClauses.push('p.prefecture = ?');
     bindings.push(params.prefecture);
@@ -53,6 +60,10 @@ export async function searchProperties(
     whereClauses.push('(p.station_minutes IS NULL OR p.station_minutes <= ?)');
     bindings.push(params.stationMinutes);
   }
+  if (params.yieldMin !== undefined) {
+    whereClauses.push('p.yield_rate >= ?');
+    bindings.push(params.yieldMin);
+  }
   if (params.sites && params.sites.length > 0) {
     const placeholders = params.sites.map(() => '?').join(', ');
     whereClauses.push(`p.site_id IN (${placeholders})`);
@@ -67,12 +78,13 @@ export async function searchProperties(
   const whereSQL = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
   const sortMap: Record<string, string> = {
-    price_asc:  'p.price ASC NULLS LAST',
-    price_desc: 'p.price DESC NULLS LAST',
-    area_asc:   'p.area ASC NULLS LAST',
-    area_desc:  'p.area DESC NULLS LAST',
-    newest:     'p.scraped_at DESC',
-    relevance:  'p.scraped_at DESC',
+    price_asc:   'p.price ASC NULLS LAST',
+    price_desc:  'p.price DESC NULLS LAST',
+    area_asc:    'p.area ASC NULLS LAST',
+    area_desc:   'p.area DESC NULLS LAST',
+    yield_desc:  'p.yield_rate DESC NULLS LAST',
+    newest:      'p.scraped_at DESC',
+    relevance:   'p.scraped_at DESC',
   };
   const orderSQL = sortMap[params.sortBy ?? 'newest'] ?? 'p.scraped_at DESC';
 
@@ -101,15 +113,13 @@ export async function searchProperties(
 
   const properties: Property[] = (rows.results ?? []).map(rowToProperty);
 
-  // Count per site
+  const allSites: SiteId[] = ['suumo', 'homes', 'athome', 'fudosan', 'chintai', 'smaity', 'reins', 'kenbiya', 'rakumachi'];
   const siteCountRows = await db
     .prepare(`SELECT site_id, COUNT(*) as cnt FROM properties p ${whereSQL} GROUP BY site_id`)
     .bind(...bindings)
     .all<{ site_id: SiteId; cnt: number }>();
 
   const siteCounts = new Map((siteCountRows.results ?? []).map(r => [r.site_id, r.cnt]));
-
-  const allSites: SiteId[] = ['suumo', 'homes', 'athome', 'fudosan', 'chintai', 'smaity', 'reins'];
   const siteResults = allSites.map(siteId => ({
     siteId,
     count: siteCounts.get(siteId) ?? 0,
@@ -152,43 +162,55 @@ export async function upsertProperty(db: D1Database, prop: Omit<Property, 'id'>)
   const id = `${prop.siteId}_${prop.sitePropertyId}`;
   await db.prepare(`
     INSERT INTO properties (
-      id, site_id, site_property_id, title, property_type, prefecture, city, address,
-      price, price_text, area, building_area, land_area, rooms, age, floor, total_floors,
-      station, station_minutes, thumbnail_url, detail_url, description, latitude, longitude,
+      id, site_id, site_property_id, title, property_type, status,
+      prefecture, city, address, price, price_text, area, building_area, land_area,
+      rooms, age, floor, total_floors, station, station_minutes,
+      thumbnail_url, detail_url, description, yield_rate, latitude, longitude,
       created_at, updated_at, scraped_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      datetime('now'), datetime('now'), datetime('now'))
+      ?, ?, datetime('now'), datetime('now'), datetime('now'))
     ON CONFLICT(site_id, site_property_id) DO UPDATE SET
       title = excluded.title,
       price = excluded.price,
       price_text = excluded.price_text,
       description = excluded.description,
+      status = CASE WHEN properties.status = 'sold' THEN 'sold' ELSE 'active' END,
       updated_at = datetime('now'),
       scraped_at = datetime('now')
   `).bind(
-    id, prop.siteId, prop.sitePropertyId, prop.title, prop.propertyType,
+    id, prop.siteId, prop.sitePropertyId, prop.title, prop.propertyType, prop.status ?? 'active',
     prop.prefecture, prop.city, prop.address ?? null,
     prop.price ?? null, prop.priceText, prop.area ?? null,
     prop.buildingArea ?? null, prop.landArea ?? null,
     prop.rooms ?? null, prop.age ?? null, prop.floor ?? null, prop.totalFloors ?? null,
     prop.station ?? null, prop.stationMinutes ?? null,
     prop.thumbnailUrl ?? null, prop.detailUrl, prop.description ?? null,
-    prop.latitude ?? null, prop.longitude ?? null
+    prop.yieldRate ?? null, prop.latitude ?? null, prop.longitude ?? null
   ).run();
 
   return id;
 }
 
+export async function markPropertySold(db: D1Database, id: string): Promise<void> {
+  await db.prepare(
+    `UPDATE properties SET status = 'sold', sold_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+  ).bind(id).run();
+}
+
 export async function getStats(db: D1Database) {
-  const [totalProps, siteBreakdown, prefBreakdown, recentJobs] = await Promise.all([
+  const [totalProps, activeProps, soldProps, siteBreakdown, prefBreakdown, recentJobs] = await Promise.all([
     db.prepare('SELECT COUNT(*) as total FROM properties').first<{ total: number }>(),
-    db.prepare('SELECT site_id, COUNT(*) as cnt FROM properties GROUP BY site_id').all<{ site_id: string; cnt: number }>(),
-    db.prepare('SELECT prefecture, COUNT(*) as cnt FROM properties GROUP BY prefecture ORDER BY cnt DESC LIMIT 10').all<{ prefecture: string; cnt: number }>(),
+    db.prepare("SELECT COUNT(*) as total FROM properties WHERE status = 'active'").first<{ total: number }>(),
+    db.prepare("SELECT COUNT(*) as total FROM properties WHERE status = 'sold'").first<{ total: number }>(),
+    db.prepare("SELECT site_id, COUNT(*) as cnt FROM properties WHERE status = 'active' GROUP BY site_id").all<{ site_id: string; cnt: number }>(),
+    db.prepare("SELECT prefecture, COUNT(*) as cnt FROM properties WHERE status = 'active' GROUP BY prefecture ORDER BY cnt DESC LIMIT 10").all<{ prefecture: string; cnt: number }>(),
     db.prepare('SELECT * FROM scrape_jobs ORDER BY started_at DESC LIMIT 10').all<ScrapeJob>(),
   ]);
 
   return {
     totalProperties: totalProps?.total ?? 0,
+    activeProperties: activeProps?.total ?? 0,
+    soldProperties: soldProps?.total ?? 0,
     bysite: siteBreakdown.results ?? [],
     byPrefecture: prefBreakdown.results ?? [],
     recentJobs: recentJobs.results ?? [],
@@ -222,6 +244,7 @@ function rowToProperty(row: Record<string, unknown>): Property {
     sitePropertyId: row.site_property_id as string,
     title: row.title as string,
     propertyType: row.property_type as Property['propertyType'],
+    status: (row.status as Property['status']) ?? 'active',
     prefecture: row.prefecture as Property['prefecture'],
     city: row.city as string,
     address: (row.address as string) ?? null,
@@ -241,9 +264,12 @@ function rowToProperty(row: Record<string, unknown>): Property {
     detailUrl: row.detail_url as string,
     description: (row.description as string) ?? null,
     features: row.features_concat ? (row.features_concat as string).split(',').filter(Boolean) : [],
+    yieldRate: (row.yield_rate as number) ?? null,
     latitude: (row.latitude as number) ?? null,
     longitude: (row.longitude as number) ?? null,
     priceHistory: [],
+    listedAt: (row.listed_at as string) ?? null,
+    soldAt: (row.sold_at as string) ?? null,
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     scrapedAt: row.scraped_at as string,

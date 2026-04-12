@@ -1,4 +1,4 @@
-// MAL System - Type Definitions v5.0
+// MAL System - Type Definitions v6.0
 
 export type PrefectureCode =
   | '01' | '02' | '03' | '04' | '05' | '06' | '07' | '08' | '09' | '10'
@@ -20,7 +20,7 @@ export const PREFECTURES: Record<PrefectureCode, string> = {
   '46': '鹿児島県', '47': '沖縄県',
 };
 
-export type SiteId = 'suumo' | 'homes' | 'athome' | 'fudosan' | 'chintai' | 'smaity' | 'reins';
+export type SiteId = 'suumo' | 'homes' | 'athome' | 'fudosan' | 'chintai' | 'smaity' | 'reins' | 'kenbiya' | 'rakumachi';
 
 export interface SiteConfig {
   id: SiteId;
@@ -28,17 +28,19 @@ export interface SiteConfig {
   url: string;
   logo: string;
   color: string;
-  rateLimit: number; // requests per minute
+  rateLimit: number;
 }
 
 export const SITES: Record<SiteId, SiteConfig> = {
-  suumo:   { id: 'suumo',   name: 'SUUMO',       url: 'https://suumo.jp',         logo: '🏠', color: '#00A960', rateLimit: 10 },
-  homes:   { id: 'homes',   name: "HOME'S",      url: 'https://www.homes.co.jp',  logo: '🏡', color: '#FF6B35', rateLimit: 10 },
-  athome:  { id: 'athome',  name: 'AtHome',      url: 'https://www.athome.co.jp', logo: '🏘', color: '#0066CC', rateLimit: 10 },
-  fudosan: { id: 'fudosan', name: '不動産Japan',  url: 'https://fudosan.jp',       logo: '🏗', color: '#E74C3C', rateLimit: 8  },
-  chintai: { id: 'chintai', name: 'CHINTAI',     url: 'https://chintai.net',      logo: '🏢', color: '#9B59B6', rateLimit: 8  },
-  smaity:  { id: 'smaity',  name: 'Smaity',      url: 'https://smaity.com',       logo: '🏬', color: '#F39C12', rateLimit: 6  },
-  reins:   { id: 'reins',   name: 'REINS',       url: 'https://www.reins.or.jp',  logo: '📋', color: '#2ECC71', rateLimit: 5  },
+  suumo:     { id: 'suumo',     name: 'SUUMO',       url: 'https://suumo.jp',              logo: '🏠', color: '#00A960', rateLimit: 10 },
+  homes:     { id: 'homes',     name: "HOME'S",       url: 'https://www.homes.co.jp',       logo: '🏡', color: '#FF6B35', rateLimit: 10 },
+  athome:    { id: 'athome',    name: 'AtHome',       url: 'https://www.athome.co.jp',      logo: '🏘', color: '#0066CC', rateLimit: 10 },
+  fudosan:   { id: 'fudosan',   name: '不動産Japan',   url: 'https://fudosan.jp',            logo: '🏗', color: '#E74C3C', rateLimit: 8  },
+  chintai:   { id: 'chintai',   name: 'CHINTAI',      url: 'https://chintai.net',           logo: '🏢', color: '#9B59B6', rateLimit: 8  },
+  smaity:    { id: 'smaity',    name: 'Smaity',       url: 'https://smaity.com',            logo: '🏬', color: '#F39C12', rateLimit: 6  },
+  reins:     { id: 'reins',     name: 'REINS',        url: 'https://www.reins.or.jp',       logo: '📋', color: '#2ECC71', rateLimit: 5  },
+  kenbiya:   { id: 'kenbiya',   name: '健美家',        url: 'https://www.kenbiya.com',       logo: '💰', color: '#DC2626', rateLimit: 8  },
+  rakumachi: { id: 'rakumachi', name: '楽待',          url: 'https://www.rakumachi.jp',      logo: '📈', color: '#7C3AED', rateLimit: 8  },
 };
 
 export type PropertyType =
@@ -48,7 +50,10 @@ export type PropertyType =
   | 'chintai_mansion'
   | 'chintai_ikkodate'
   | 'jimusho'
+  | 'investment'
   | 'other';
+
+export type PropertyStatus = 'active' | 'sold' | 'delisted';
 
 export interface Property {
   id: string;
@@ -56,16 +61,17 @@ export interface Property {
   sitePropertyId: string;
   title: string;
   propertyType: PropertyType;
+  status: PropertyStatus;
   prefecture: PrefectureCode;
   city: string;
   address: string | null;
-  price: number | null;       // 万円
+  price: number | null;
   priceText: string;
-  area: number | null;        // m²
-  buildingArea: number | null; // m²
-  landArea: number | null;    // m²
-  rooms: string | null;       // e.g. "3LDK"
-  age: number | null;         // 築年数
+  area: number | null;
+  buildingArea: number | null;
+  landArea: number | null;
+  rooms: string | null;
+  age: number | null;
   floor: number | null;
   totalFloors: number | null;
   station: string | null;
@@ -75,9 +81,12 @@ export interface Property {
   detailUrl: string;
   description: string | null;
   features: string[];
+  yieldRate: number | null;      // 表面利回り % (投資物件)
   latitude: number | null;
   longitude: number | null;
   priceHistory: PriceHistoryEntry[];
+  listedAt: string | null;       // 掲載開始日
+  soldAt: string | null;         // 売却日
   createdAt: string;
   updatedAt: string;
   scrapedAt: string;
@@ -93,6 +102,7 @@ export interface SearchParams {
   prefecture?: PrefectureCode;
   city?: string;
   propertyType?: PropertyType;
+  status?: PropertyStatus | 'all';
   priceMin?: number;
   priceMax?: number;
   areaMin?: number;
@@ -100,8 +110,9 @@ export interface SearchParams {
   rooms?: string;
   ageMax?: number;
   stationMinutes?: number;
+  yieldMin?: number;             // 利回り下限
   sites?: SiteId[];
-  sortBy?: 'price_asc' | 'price_desc' | 'area_asc' | 'area_desc' | 'newest' | 'relevance';
+  sortBy?: 'price_asc' | 'price_desc' | 'area_asc' | 'area_desc' | 'newest' | 'relevance' | 'yield_desc';
   page?: number;
   limit?: number;
 }
@@ -132,6 +143,8 @@ export interface ScrapeJob {
   status: 'pending' | 'running' | 'completed' | 'failed';
   propertiesFound: number;
   propertiesNew: number;
+  propertiesUpdated: number;
+  propertiesSold: number;
   errorMessage?: string;
   startedAt: string;
   completedAt?: string;
@@ -147,7 +160,7 @@ export interface PricePrediction {
 
 export interface PriceFactor {
   name: string;
-  impact: number; // -1 to 1
+  impact: number;
   description: string;
 }
 
