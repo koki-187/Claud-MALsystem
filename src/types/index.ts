@@ -173,6 +173,8 @@ export interface Bindings {
   MAX_RESULTS_PER_SITE: string;
   CACHE_TTL_SECONDS: string;
   RATE_LIMIT_PER_MINUTE: string;
+  /** Comma-separated prefecture codes to override PREFECTURE_ROTATION. Optional. */
+  SCRAPE_PREFECTURES?: string;
 }
 
 export interface AppVariables {

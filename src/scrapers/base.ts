@@ -24,12 +24,28 @@ export abstract class BaseScraper {
     this.options = {
       maxRetries: options.maxRetries ?? 3,
       timeoutMs: options.timeoutMs ?? 15000,
-      userAgent: options.userAgent ?? 'Mozilla/5.0 (compatible; MAL-Bot/5.0; +https://mal-system.pages.dev)',
+      userAgent: options.userAgent ?? 'Mozilla/5.0 (compatible; MAL-Bot/6.0; +https://mal-system.pages.dev)',
     };
   }
 
   abstract scrapeListings(ctx: ScrapeContext): Promise<Property[]>;
-  abstract scrapeDetail(url: string): Promise<Partial<Property>>;
+
+  // Default no-op — subclasses override when they support detail scraping
+  async scrapeDetail(_url: string): Promise<Partial<Property>> {
+    return {};
+  }
+
+  /**
+   * Fetch URL and return HTML string. Returns null on any error (never throws).
+   */
+  protected async fetchHtml(url: string): Promise<string | null> {
+    try {
+      const resp = await this.fetchWithRetry(url);
+      return await resp.text();
+    } catch {
+      return null;
+    }
+  }
 
   protected async fetchWithRetry(url: string, options?: RequestInit): Promise<Response> {
     await this.checkRateLimit();
@@ -118,6 +134,62 @@ export abstract class BaseScraper {
     return match ? parseFloat(match[1]) : null;
   }
 
+  /**
+   * Extract og:image or first meaningful <img> src as thumbnail.
+   */
+  protected extractThumbnail(html: string): string | null {
+    // og:image (most reliable)
+    const ogMatch = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i)
+      ?? html.match(/<meta[^>]+content="([^"]+)"[^>]+property="og:image"/i);
+    if (ogMatch?.[1]) return ogMatch[1];
+
+    // First <img> with a plausible property photo src
+    const imgMatch = html.match(/<img[^>]+src="(https?:\/\/[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"/i);
+    if (imgMatch?.[1]) return imgMatch[1];
+
+    return null;
+  }
+
+  /**
+   * Extract up to 10 unique image URLs from HTML.
+   */
+  protected extractImages(html: string, baseUrl?: string): string[] {
+    const images: string[] = [];
+    const seen = new Set<string>();
+    const imgRegex = /<img[^>]+src="([^"]+)"/gi;
+    let m;
+    while ((m = imgRegex.exec(html)) !== null && images.length < 10) {
+      let src = m[1];
+      if (src.startsWith('//')) src = 'https:' + src;
+      else if (src.startsWith('/') && baseUrl) src = baseUrl + src;
+      if (!src.startsWith('http')) continue;
+      if (seen.has(src)) continue;
+      // Skip tracking pixels, icons, logos
+      if (src.match(/(?:pixel|beacon|logo|icon|sprite|blank|spacer)/i)) continue;
+      seen.add(src);
+      images.push(src);
+    }
+    return images;
+  }
+
+  /**
+   * Parse "最寄り駅 徒歩X分" style text.
+   */
+  protected extractStation(text: string): { station: string | null; stationMinutes: number | null } {
+    const m = text.match(/([^\s　]+駅?)\s*(?:徒歩|歩いて)?(\d+)分/);
+    if (m) return { station: m[1].replace(/駅$/, ''), stationMinutes: parseInt(m[2]) };
+    return { station: null, stationMinutes: null };
+  }
+
+  /**
+   * Parse "築X年" → X, "新築" → 0, else null.
+   */
+  protected extractAge(text: string): number | null {
+    if (/新築/.test(text)) return 0;
+    const m = text.match(/築(\d+)年/);
+    return m ? parseInt(m[1]) : null;
+  }
+
   protected generateId(sitePropertyId: string): string {
     return `${this.siteId}_${sitePropertyId}`;
   }
@@ -133,6 +205,7 @@ export abstract class BaseScraper {
     return {
       id: this.generateId(overrides.sitePropertyId),
       siteId: this.siteId,
+      status: 'active',
       address: null,
       price: null,
       priceText: '',
@@ -152,7 +225,6 @@ export abstract class BaseScraper {
       latitude: null,
       longitude: null,
       priceHistory: [],
-      status: 'active' as const,
       yieldRate: null,
       listedAt: null,
       soldAt: null,
