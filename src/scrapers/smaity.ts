@@ -30,6 +30,7 @@ export class SmaityScraper extends BaseScraper {
         const titleMatch = card.match(/<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/);
         const priceMatch = card.match(/(\d[,\d]*万円)/);
         const areaMatch  = card.match(/(\d+(?:\.\d+)?)\s*㎡/);
+        const roomsMatch = card.match(/([1-9][LDKSR]+)/);
 
         if (!titleMatch) continue;
 
@@ -39,20 +40,32 @@ export class SmaityScraper extends BaseScraper {
         const area = areaMatch ? parseFloat(areaMatch[1]) : null;
         const { station, stationMinutes } = this.extractStation(card);
         const sitePropertyId = `smaity_${btoa(encodeURIComponent(detailUrl)).slice(0, 18)}`;
+        const city = card.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+
+        const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms: roomsMatch?.[1] ?? null });
 
         properties.push(this.buildBaseProperty({
           sitePropertyId,
           title,
           propertyType: 'mansion',
           prefecture,
-          city: '',
+          city,
           detailUrl,
           price,
           priceText,
           area,
+          rooms: roomsMatch?.[1] ?? null,
           station,
           stationMinutes,
           thumbnailUrl: this.extractThumbnail(card),
+          images: this.extractImages(card),
+          managementFee: this.extractMonthlyFee(card, '管理費'),
+          repairFund: this.extractMonthlyFee(card, '修繕積立金'),
+          direction: this.extractDirection(card),
+          structure: this.extractStructure(card),
+          floorPlanUrl: this.extractFloorPlanUrl(card),
+          exteriorUrl: this.extractExteriorUrl(card),
+          fingerprint,
         }));
         count++;
       } catch { continue; }
@@ -68,27 +81,38 @@ export class SmaityScraper extends BaseScraper {
       { title: '投資用 千葉市中央区 1R 駅1分',              price: 1500, area: 22.0, rooms: '1R',   age: 25, city: '千葉市中央区',    station: '千葉',    stationMinutes: 1, lat: 35.6074, lng: 140.1065 },
     ];
 
-    return mockProperties.map((m, i) => this.buildBaseProperty({
-      sitePropertyId: `mock_${prefecture}_smaity_${i}`,
-      title: m.title,
-      propertyType: 'mansion',
-      prefecture,
-      city: m.city,
-      detailUrl: `https://smaity.com/property/search/?pref=${prefecture}`,
-      price: m.price,
-      priceText: `${m.price.toLocaleString()}万円`,
-      area: m.area,
-      buildingArea: m.area,
-      rooms: m.rooms,
-      age: m.age,
-      floor: 2 + i * 2,
-      totalFloors: 10,
-      station: m.station,
-      stationMinutes: m.stationMinutes,
-      description: `Smaity掲載の投資用物件。${m.city}エリア。安定した賃貸需要が見込めます。`,
-      features: ['投資用', '高利回り', '管理会社あり', '入居中'],
-      latitude:  m.lat + (i - 1) * 0.01,
-      longitude: m.lng + (i - 1) * 0.01,
-    }));
+    return mockProperties.map((m, i) => {
+      const fingerprint = this.computeFingerprint({ prefecture, city: m.city, price: m.price, area: m.area, rooms: m.rooms });
+      return this.buildBaseProperty({
+        sitePropertyId: `mock_${prefecture}_smaity_${i}`,
+        title: m.title,
+        propertyType: 'mansion',
+        prefecture,
+        city: m.city,
+        detailUrl: `https://smaity.com/property/search/?pref=${prefecture}`,
+        price: m.price,
+        priceText: `${m.price.toLocaleString()}万円`,
+        area: m.area,
+        buildingArea: m.area,
+        rooms: m.rooms,
+        age: m.age,
+        floor: 2 + i * 2,
+        totalFloors: 10,
+        station: m.station,
+        stationMinutes: m.stationMinutes,
+        description: `Smaity掲載の投資用物件。${m.city}エリア。安定した賃貸需要が見込めます。`,
+        features: ['投資用', '高利回り', '管理会社あり', '入居中'],
+        latitude:  m.lat + (i - 1) * 0.01,
+        longitude: m.lng + (i - 1) * 0.01,
+        fingerprint,
+        managementFee: null,
+        repairFund: null,
+        direction: null,
+        structure: null,
+        floorPlanUrl: null,
+        exteriorUrl: null,
+        lastSeenAt: null,
+      });
+    });
   }
 }

@@ -30,6 +30,7 @@ export class HomesScraper extends BaseScraper {
         const titleMatch = card.match(/<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([^<]+)<\/a>/);
         const priceMatch = card.match(/(\d[,\d]*万円)/);
         const areaMatch  = card.match(/専有面積[^0-9]*(\d+(?:\.\d+)?)\s*m/);
+        const roomsMatch = card.match(/([1-9][LDKSR]+)/);
 
         if (!titleMatch) continue;
 
@@ -40,21 +41,37 @@ export class HomesScraper extends BaseScraper {
         const { station, stationMinutes } = this.extractStation(card);
         const age = this.extractAge(card);
         const sitePropertyId = `homes_${btoa(encodeURIComponent(detailUrl)).slice(0, 18)}`;
+        const city = card.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+
+        // HOME'S特有パターン
+        const managementFee = this.extractMonthlyFee(card, '管理費/月');
+        const repairFund = this.extractMonthlyFee(card, '修繕積立金');
+
+        const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms: roomsMatch?.[1] ?? null });
 
         properties.push(this.buildBaseProperty({
           sitePropertyId,
           title,
           propertyType: 'mansion',
           prefecture,
-          city: '',
+          city,
           detailUrl,
           price,
           priceText,
           area,
+          rooms: roomsMatch?.[1] ?? null,
           station,
           stationMinutes,
           age,
           thumbnailUrl: this.extractThumbnail(card),
+          images: this.extractImages(card),
+          managementFee,
+          repairFund,
+          direction: this.extractDirection(card),
+          structure: this.extractStructure(card),
+          floorPlanUrl: this.extractFloorPlanUrl(card),
+          exteriorUrl: this.extractExteriorUrl(card),
+          fingerprint,
         }));
         count++;
       } catch { continue; }
@@ -70,27 +87,38 @@ export class HomesScraper extends BaseScraper {
       { title: '名古屋市中村区 新築マンション 2LDK',       price:  4100, area:  65.0, rooms: '2LDK', age:  0, city: '名古屋市中村区', station: '名古屋',    stationMinutes: 10, lat: 35.1702, lng: 136.8816 },
     ];
 
-    return mockProperties.map((m, i) => this.buildBaseProperty({
-      sitePropertyId: `mock_${prefecture}_homes_${i}`,
-      title: m.title,
-      propertyType: 'mansion',
-      prefecture,
-      city: m.city,
-      detailUrl: `https://www.homes.co.jp/mansion/buy/list/?pref=${prefecture}`,
-      price: m.price,
-      priceText: `${m.price.toLocaleString()}万円`,
-      area: m.area,
-      buildingArea: m.area,
-      rooms: m.rooms,
-      age: m.age,
-      floor: 3 + i * 4,
-      totalFloors: 20,
-      station: m.station,
-      stationMinutes: m.stationMinutes,
-      description: `${m.city}の${m.rooms}物件。HOME'S掲載物件。`,
-      features: ['オートロック', 'モニター付インターホン', '宅配ボックス'],
-      latitude:  m.lat + (i - 1) * 0.005,
-      longitude: m.lng + (i - 1) * 0.005,
-    }));
+    return mockProperties.map((m, i) => {
+      const fingerprint = this.computeFingerprint({ prefecture, city: m.city, price: m.price, area: m.area, rooms: m.rooms });
+      return this.buildBaseProperty({
+        sitePropertyId: `mock_${prefecture}_homes_${i}`,
+        title: m.title,
+        propertyType: 'mansion',
+        prefecture,
+        city: m.city,
+        detailUrl: `https://www.homes.co.jp/mansion/buy/list/?pref=${prefecture}`,
+        price: m.price,
+        priceText: `${m.price.toLocaleString()}万円`,
+        area: m.area,
+        buildingArea: m.area,
+        rooms: m.rooms,
+        age: m.age,
+        floor: 3 + i * 4,
+        totalFloors: 20,
+        station: m.station,
+        stationMinutes: m.stationMinutes,
+        description: `${m.city}の${m.rooms}物件。HOME'S掲載物件。`,
+        features: ['オートロック', 'モニター付インターホン', '宅配ボックス'],
+        latitude:  m.lat + (i - 1) * 0.005,
+        longitude: m.lng + (i - 1) * 0.005,
+        fingerprint,
+        managementFee: null,
+        repairFund: null,
+        direction: null,
+        structure: null,
+        floorPlanUrl: null,
+        exteriorUrl: null,
+        lastSeenAt: null,
+      });
+    });
   }
 }

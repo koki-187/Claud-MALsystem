@@ -168,7 +168,6 @@ export async function runScheduledScrape(env: Bindings): Promise<{
 
   let total = 0, newCount = 0, updatedCount = 0, soldCount = 0;
   const errors: string[] = [];
-  let hadRealWrites = false;
 
   for (const prefecture of targetPrefectures) {
     for (const siteId of ALL_SITE_IDS) {
@@ -196,27 +195,25 @@ export async function runScheduledScrape(env: Bindings): Promise<{
           continue;
         }
 
-        hadRealWrites = true;
         let jobNew = 0, jobUpdated = 0, jobSold = 0;
 
-        // Get existing active property IDs for this site+prefecture
+        // Get existing active property IDs for this site+prefecture (for new/updated counting)
         const existingRows = await env.MAL_DB
           .prepare(
-            `SELECT id, site_property_id, price FROM properties
+            `SELECT site_property_id FROM properties
              WHERE site_id = ? AND prefecture = ? AND status = 'active'`
           )
           .bind(siteId, prefecture)
-          .all<{ id: string; site_property_id: string; price: number | null }>();
+          .all<{ site_property_id: string }>();
 
-        const existingMap = new Map(
-          (existingRows.results ?? []).map(r => [r.site_property_id, r])
+        const existingSet = new Set(
+          (existingRows.results ?? []).map(r => r.site_property_id)
         );
-        const foundIds = new Set(properties.map(p => p.sitePropertyId));
 
         // ── Upsert scraped properties ─────────────────────────────────────────
         for (const prop of properties) {
           const id = `${prop.siteId}_${prop.sitePropertyId}`;
-          const isNew = !existingMap.has(prop.sitePropertyId);
+          const isNew = !existingSet.has(prop.sitePropertyId);
           if (isNew) jobNew++; else jobUpdated++;
 
           await env.MAL_DB.prepare(`
@@ -225,20 +222,23 @@ export async function runScheduledScrape(env: Bindings): Promise<{
               prefecture, city, address, price, price_text, area, building_area, land_area,
               rooms, age, floor, total_floors, station, station_minutes,
               thumbnail_url, detail_url, description, yield_rate, latitude, longitude,
+              fingerprint, last_seen_at,
               created_at, updated_at, scraped_at
             ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
+              ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'), datetime('now'))
             ON CONFLICT(site_id, site_property_id) DO UPDATE SET
-              title        = excluded.title,
-              price        = excluded.price,
-              price_text   = excluded.price_text,
-              area         = COALESCE(excluded.area, area),
-              thumbnail_url= COALESCE(excluded.thumbnail_url, thumbnail_url),
-              description  = COALESCE(excluded.description, description),
-              yield_rate   = COALESCE(excluded.yield_rate, yield_rate),
-              status       = CASE WHEN status = 'sold' THEN 'sold' ELSE 'active' END,
-              updated_at   = datetime('now'),
-              scraped_at   = datetime('now')
+              title         = excluded.title,
+              price         = excluded.price,
+              price_text    = excluded.price_text,
+              area          = COALESCE(excluded.area, area),
+              thumbnail_url = COALESCE(excluded.thumbnail_url, thumbnail_url),
+              description   = COALESCE(excluded.description, description),
+              yield_rate    = COALESCE(excluded.yield_rate, yield_rate),
+              fingerprint   = excluded.fingerprint,
+              last_seen_at  = datetime('now'),
+              status        = CASE WHEN status = 'sold' THEN 'sold' ELSE 'active' END,
+              updated_at    = datetime('now'),
+              scraped_at    = datetime('now')
           `).bind(
             id, prop.siteId, prop.sitePropertyId, prop.title, prop.propertyType,
             prop.prefecture, prop.city ?? '', prop.address ?? null,
@@ -247,7 +247,8 @@ export async function runScheduledScrape(env: Bindings): Promise<{
             prop.rooms ?? null, prop.age ?? null, prop.floor ?? null, prop.totalFloors ?? null,
             prop.station ?? null, prop.stationMinutes ?? null,
             prop.thumbnailUrl ?? null, prop.detailUrl, prop.description ?? null,
-            prop.yieldRate ?? null, prop.latitude ?? null, prop.longitude ?? null
+            prop.yieldRate ?? null, prop.latitude ?? null, prop.longitude ?? null,
+            prop.fingerprint ?? null
           ).run();
 
           // ── Price history (one entry per property per day) ──────────────────
@@ -259,17 +260,15 @@ export async function runScheduledScrape(env: Bindings): Promise<{
           }
         }
 
-        // ── Mark sold: active properties not found in this scrape ─────────────
-        for (const [sitePropertyId, existing] of existingMap) {
-          if (!foundIds.has(sitePropertyId)) {
-            await env.MAL_DB.prepare(
-              `UPDATE properties
-               SET status = 'sold', sold_at = datetime('now'), updated_at = datetime('now')
-               WHERE id = ?`
-            ).bind(existing.id).run();
-            jobSold++;
-          }
-        }
+        // ── Mark sold: active properties not seen in the last 48 hours ────────
+        const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+        const soldResult = await env.MAL_DB.prepare(`
+          UPDATE properties
+          SET status = 'sold', sold_at = datetime('now'), updated_at = datetime('now')
+          WHERE site_id = ? AND prefecture = ? AND status = 'active'
+            AND (last_seen_at IS NULL OR last_seen_at < ?)
+        `).bind(siteId, prefecture, cutoff).run();
+        jobSold = (soldResult.meta?.changes as number | undefined) ?? 0;
 
         await env.MAL_DB.prepare(`
           UPDATE scrape_jobs
@@ -297,16 +296,6 @@ export async function runScheduledScrape(env: Bindings): Promise<{
         } catch { /* ignore secondary failure */ }
       }
     }
-  }
-
-  // ── Invalidate KV search cache after real writes ──────────────────────────
-  if (hadRealWrites) {
-    try {
-      const list = await env.MAL_CACHE.list({ prefix: 'search:' });
-      for (const key of list.keys) {
-        await env.MAL_CACHE.delete(key.name).catch(() => {});
-      }
-    } catch { /* KV errors shouldn't fail the whole job */ }
   }
 
   return { total, newCount, updatedCount, soldCount, errors };

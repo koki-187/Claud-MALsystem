@@ -30,6 +30,7 @@ export class KenbiyaScraper extends BaseScraper {
     const areaPattern = /([0-9.]+)\s*(?:m²|㎡)/;
     const linkPattern = /href="([^"]+bukken[^"]+)"/i;
     const yieldPattern = /([0-9.]+)\s*%/;
+    const annualIncomePattern = /([0-9,]+)万円\/年/;
 
     let match;
     while ((match = itemPattern.exec(html)) !== null && properties.length < maxResults) {
@@ -40,6 +41,7 @@ export class KenbiyaScraper extends BaseScraper {
         const areaM   = areaPattern.exec(chunk);
         const linkM   = linkPattern.exec(chunk);
         const yieldM  = yieldPattern.exec(chunk);
+        const annualM = annualIncomePattern.exec(chunk);
 
         if (!titleM || !linkM) continue;
 
@@ -49,19 +51,38 @@ export class KenbiyaScraper extends BaseScraper {
         const sitePropertyId = `kenbiya_${btoa(encodeURIComponent(detailUrl)).slice(0, 20)}`;
         const price = priceM ? parseInt(priceM[1].replace(/,/g, '')) : null;
         const area  = areaM  ? parseFloat(areaM[1]) : null;
+        const city = chunk.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+        const yieldRate = yieldM ? parseFloat(yieldM[1]) : null;
+
+        // 想定年収を description に追記
+        let descriptionExtra = '';
+        if (annualM) {
+          descriptionExtra = ` 想定年収：${annualM[1]}万円/年`;
+        }
+
+        const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms: null });
 
         properties.push(this.buildBaseProperty({
           sitePropertyId,
           title: titleM[1].trim(),
           propertyType: 'investment',
           prefecture,
-          city: '',
+          city,
           detailUrl,
           price,
           priceText: priceM ? `${priceM[1]}万円` : '価格要相談',
           area,
-          yieldRate: yieldM ? parseFloat(yieldM[1]) : null,
+          yieldRate,
+          description: descriptionExtra || null,
           thumbnailUrl: this.extractThumbnail(chunk),
+          images: this.extractImages(chunk),
+          managementFee: this.extractMonthlyFee(chunk, '管理費'),
+          repairFund: this.extractMonthlyFee(chunk, '修繕積立金'),
+          direction: this.extractDirection(chunk),
+          structure: this.extractStructure(chunk),
+          floorPlanUrl: this.extractFloorPlanUrl(chunk),
+          exteriorUrl: this.extractExteriorUrl(chunk),
+          fingerprint,
         }));
       } catch { continue; }
     }
@@ -75,26 +96,37 @@ export class KenbiyaScraper extends BaseScraper {
       { title: '【健美家】神奈川 一棟マンション 利回り7.8%', price: 15000, area: 580, rooms: '12室', age: 22, city: '横浜市中区',   station: '関内',   stationMinutes: 6,  lat: 35.444, lng: 139.641, yieldRate: 7.8  },
     ];
 
-    return mockProperties.map((m, i) => this.buildBaseProperty({
-      sitePropertyId: `mock_${prefecture}_kenbiya_${i}`,
-      title: m.title,
-      propertyType: 'investment',
-      prefecture,
-      city: m.city,
-      detailUrl: `https://www.kenbiya.com/ar/${String(parseInt(prefecture)).padStart(4, '0')}/`,
-      price: m.price,
-      priceText: `${m.price.toLocaleString()}万円`,
-      area: m.area,
-      buildingArea: m.area,
-      rooms: m.rooms,
-      age: m.age,
-      station: m.station,
-      stationMinutes: m.stationMinutes,
-      yieldRate: m.yieldRate,
-      description: `健美家掲載の収益物件。${m.city}エリア。表面利回り${m.yieldRate}%。`,
-      features: ['一棟物件', '投資用', '利回り良好', '管理会社あり'],
-      latitude:  m.lat + (i - 1) * 0.01,
-      longitude: m.lng + (i - 1) * 0.01,
-    }));
+    return mockProperties.map((m, i) => {
+      const fingerprint = this.computeFingerprint({ prefecture, city: m.city, price: m.price, area: m.area, rooms: m.rooms });
+      return this.buildBaseProperty({
+        sitePropertyId: `mock_${prefecture}_kenbiya_${i}`,
+        title: m.title,
+        propertyType: 'investment',
+        prefecture,
+        city: m.city,
+        detailUrl: `https://www.kenbiya.com/ar/${String(parseInt(prefecture)).padStart(4, '0')}/`,
+        price: m.price,
+        priceText: `${m.price.toLocaleString()}万円`,
+        area: m.area,
+        buildingArea: m.area,
+        rooms: m.rooms,
+        age: m.age,
+        station: m.station,
+        stationMinutes: m.stationMinutes,
+        yieldRate: m.yieldRate,
+        description: `健美家掲載の収益物件。${m.city}エリア。表面利回り${m.yieldRate}%。`,
+        features: ['一棟物件', '投資用', '利回り良好', '管理会社あり'],
+        latitude:  m.lat + (i - 1) * 0.01,
+        longitude: m.lng + (i - 1) * 0.01,
+        fingerprint,
+        managementFee: null,
+        repairFund: null,
+        direction: null,
+        structure: null,
+        floorPlanUrl: null,
+        exteriorUrl: null,
+        lastSeenAt: null,
+      });
+    });
   }
 }

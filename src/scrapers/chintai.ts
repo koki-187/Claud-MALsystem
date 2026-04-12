@@ -41,13 +41,16 @@ export class ChintaiScraper extends BaseScraper {
         const { station, stationMinutes } = this.extractStation(card);
         const age = this.extractAge(card);
         const sitePropertyId = `chintai_${btoa(encodeURIComponent(detailUrl)).slice(0, 18)}`;
+        const city = card.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+
+        const fingerprint = this.computeFingerprint({ prefecture, city, price: rent, area, rooms: roomsMatch?.[1] ?? null });
 
         properties.push(this.buildBaseProperty({
           sitePropertyId,
           title,
           propertyType: 'chintai_mansion',
           prefecture,
-          city: '',
+          city,
           detailUrl,
           price: rent,
           priceText: rent ? `家賃${rent}万円/月` : '要問合せ',
@@ -57,6 +60,14 @@ export class ChintaiScraper extends BaseScraper {
           stationMinutes,
           age,
           thumbnailUrl: this.extractThumbnail(card),
+          images: this.extractImages(card),
+          managementFee: this.extractMonthlyFee(card, '管理費'),
+          repairFund: this.extractMonthlyFee(card, '修繕積立金'),
+          direction: this.extractDirection(card),
+          structure: this.extractStructure(card),
+          floorPlanUrl: this.extractFloorPlanUrl(card),
+          exteriorUrl: this.extractExteriorUrl(card),
+          fingerprint,
         }));
         count++;
       } catch { continue; }
@@ -73,27 +84,38 @@ export class ChintaiScraper extends BaseScraper {
       { title: '福岡市博多区 賃貸2DK ペット可',       price: 10, area: 48.0, rooms: '2DK',  age:  6, city: '福岡市博多区', station: '博多',   stationMinutes: 12, lat: 33.5898, lng: 130.4200 },
     ];
 
-    return mockProperties.map((m, i) => this.buildBaseProperty({
-      sitePropertyId: `mock_${prefecture}_chintai_${i}`,
-      title: m.title,
-      propertyType: 'chintai_mansion',
-      prefecture,
-      city: m.city,
-      detailUrl: `https://chintai.net/rent/search/?prefecture_cd=${prefecture}`,
-      price: m.price,
-      priceText: `家賃${m.price}万円/月`,
-      area: m.area,
-      buildingArea: m.area,
-      rooms: m.rooms,
-      age: m.age,
-      floor: 2 + i,
-      totalFloors: 10,
-      station: m.station,
-      stationMinutes: m.stationMinutes,
-      description: `CHINTAI掲載。${m.city}の賃貸物件。初期費用も相談可能。`,
-      features: ['インターネット無料', 'バストイレ別', 'エアコン付', 'フローリング'],
-      latitude:  m.lat + (i - 1.5) * 0.005,
-      longitude: m.lng + (i - 1.5) * 0.005,
-    }));
+    return mockProperties.map((m, i) => {
+      const fingerprint = this.computeFingerprint({ prefecture, city: m.city, price: m.price, area: m.area, rooms: m.rooms });
+      return this.buildBaseProperty({
+        sitePropertyId: `mock_${prefecture}_chintai_${i}`,
+        title: m.title,
+        propertyType: 'chintai_mansion',
+        prefecture,
+        city: m.city,
+        detailUrl: `https://chintai.net/rent/search/?prefecture_cd=${prefecture}`,
+        price: m.price,
+        priceText: `家賃${m.price}万円/月`,
+        area: m.area,
+        buildingArea: m.area,
+        rooms: m.rooms,
+        age: m.age,
+        floor: 2 + i,
+        totalFloors: 10,
+        station: m.station,
+        stationMinutes: m.stationMinutes,
+        description: `CHINTAI掲載。${m.city}の賃貸物件。初期費用も相談可能。`,
+        features: ['インターネット無料', 'バストイレ別', 'エアコン付', 'フローリング'],
+        latitude:  m.lat + (i - 1.5) * 0.005,
+        longitude: m.lng + (i - 1.5) * 0.005,
+        fingerprint,
+        managementFee: null,
+        repairFund: null,
+        direction: null,
+        structure: null,
+        floorPlanUrl: null,
+        exteriorUrl: null,
+        lastSeenAt: null,
+      });
+    });
   }
 }

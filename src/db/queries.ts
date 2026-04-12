@@ -74,6 +74,14 @@ export async function searchProperties(
     const q = `%${params.query}%`;
     bindings.push(q, q, q);
   }
+  if (params.hideDuplicates) {
+    whereClauses.push(`p.id IN (
+      SELECT MIN(id) FROM properties WHERE fingerprint IS NOT NULL
+      GROUP BY fingerprint
+      UNION ALL
+      SELECT id FROM properties WHERE fingerprint IS NULL
+    )`);
+  }
 
   const whereSQL = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
@@ -155,7 +163,15 @@ export async function getPropertyById(db: D1Database, id: string): Promise<Prope
     .first<Record<string, unknown>>();
 
   if (!row) return null;
-  return rowToProperty(row);
+  const prop = rowToProperty(row);
+
+  const histRows = await db.prepare(
+    `SELECT recorded_at as date, price FROM price_history
+     WHERE property_id = ? ORDER BY recorded_at ASC LIMIT 100`
+  ).bind(prop.id).all<{ date: string; price: number }>();
+  prop.priceHistory = histRows.results ?? [];
+
+  return prop;
 }
 
 export async function upsertProperty(db: D1Database, prop: Omit<Property, 'id'>): Promise<string> {
@@ -166,17 +182,27 @@ export async function upsertProperty(db: D1Database, prop: Omit<Property, 'id'>)
       prefecture, city, address, price, price_text, area, building_area, land_area,
       rooms, age, floor, total_floors, station, station_minutes,
       thumbnail_url, detail_url, description, yield_rate, latitude, longitude,
+      fingerprint, management_fee, repair_fund, direction, structure,
+      floor_plan_url, exterior_url, last_seen_at,
       created_at, updated_at, scraped_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-      ?, ?, datetime('now'), datetime('now'), datetime('now'))
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
     ON CONFLICT(site_id, site_property_id) DO UPDATE SET
-      title = excluded.title,
-      price = excluded.price,
-      price_text = excluded.price_text,
-      description = excluded.description,
-      status = CASE WHEN properties.status = 'sold' THEN 'sold' ELSE 'active' END,
-      updated_at = datetime('now'),
-      scraped_at = datetime('now')
+      title          = excluded.title,
+      price          = excluded.price,
+      price_text     = excluded.price_text,
+      description    = excluded.description,
+      fingerprint    = excluded.fingerprint,
+      management_fee = excluded.management_fee,
+      repair_fund    = excluded.repair_fund,
+      direction      = excluded.direction,
+      structure      = excluded.structure,
+      floor_plan_url = excluded.floor_plan_url,
+      exterior_url   = excluded.exterior_url,
+      last_seen_at   = excluded.last_seen_at,
+      status         = CASE WHEN properties.status = 'sold' THEN 'sold' ELSE 'active' END,
+      updated_at     = datetime('now'),
+      scraped_at     = datetime('now')
   `).bind(
     id, prop.siteId, prop.sitePropertyId, prop.title, prop.propertyType, prop.status ?? 'active',
     prop.prefecture, prop.city, prop.address ?? null,
@@ -185,7 +211,12 @@ export async function upsertProperty(db: D1Database, prop: Omit<Property, 'id'>)
     prop.rooms ?? null, prop.age ?? null, prop.floor ?? null, prop.totalFloors ?? null,
     prop.station ?? null, prop.stationMinutes ?? null,
     prop.thumbnailUrl ?? null, prop.detailUrl, prop.description ?? null,
-    prop.yieldRate ?? null, prop.latitude ?? null, prop.longitude ?? null
+    prop.yieldRate ?? null, prop.latitude ?? null, prop.longitude ?? null,
+    prop.fingerprint ?? null,
+    prop.managementFee ?? null, prop.repairFund ?? null,
+    prop.direction ?? null, prop.structure ?? null,
+    prop.floorPlanUrl ?? null, prop.exteriorUrl ?? null,
+    prop.lastSeenAt ?? null
   ).run();
 
   return id;
@@ -273,5 +304,13 @@ function rowToProperty(row: Record<string, unknown>): Property {
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
     scrapedAt: row.scraped_at as string,
+    fingerprint: (row.fingerprint as string) ?? null,
+    managementFee: (row.management_fee as number) ?? null,
+    repairFund: (row.repair_fund as number) ?? null,
+    direction: (row.direction as string) ?? null,
+    structure: (row.structure as string) ?? null,
+    floorPlanUrl: (row.floor_plan_url as string) ?? null,
+    exteriorUrl: (row.exterior_url as string) ?? null,
+    lastSeenAt: (row.last_seen_at as string) ?? null,
   };
 }

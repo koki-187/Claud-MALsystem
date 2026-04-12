@@ -31,6 +31,7 @@ export class ReinsScraper extends BaseScraper {
         const titleMatch = row.match(/<td[^>]*class="[^"]*name[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/);
         const priceMatch = row.match(/(\d[,\d]*万円)/);
         const areaMatch  = row.match(/(\d+(?:\.\d+)?)\s*㎡/);
+        const roomsMatch = row.match(/([1-9][LDKSR]+)/);
 
         if (!titleMatch) continue;
 
@@ -40,19 +41,30 @@ export class ReinsScraper extends BaseScraper {
         const area = areaMatch ? parseFloat(areaMatch[1]) : null;
         const { station, stationMinutes } = this.extractStation(row);
         const sitePropertyId = `reins_${btoa(encodeURIComponent(detailUrl)).slice(0, 18)}`;
+        const city = row.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+
+        const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms: roomsMatch?.[1] ?? null });
 
         properties.push(this.buildBaseProperty({
           sitePropertyId,
           title,
           propertyType: 'mansion',
           prefecture,
-          city: '',
+          city,
           detailUrl,
           price,
           priceText,
           area,
+          rooms: roomsMatch?.[1] ?? null,
           station,
           stationMinutes,
+          managementFee: this.extractMonthlyFee(row, '管理費'),
+          repairFund: this.extractMonthlyFee(row, '修繕積立金'),
+          direction: this.extractDirection(row),
+          structure: this.extractStructure(row),
+          floorPlanUrl: this.extractFloorPlanUrl(row),
+          exteriorUrl: this.extractExteriorUrl(row),
+          fingerprint,
         }));
         count++;
       } catch { continue; }
@@ -83,30 +95,41 @@ export class ReinsScraper extends BaseScraper {
       },
     ];
 
-    return mockProperties.map((m, i) => this.buildBaseProperty({
-      sitePropertyId: `mock_${prefecture}_reins_${i}`,
-      title: m.title,
-      propertyType: m.type,
-      prefecture,
-      city: m.city,
-      detailUrl: `https://www.reins.or.jp/search/?prefecture=${prefecture}`,
-      price: m.price,
-      priceText: `${m.price.toLocaleString()}万円`,
-      area: m.area ?? null,
-      buildingArea: m.area ?? null,
-      landArea: m.landArea ?? null,
-      rooms: m.rooms,
-      age: m.age,
-      floor: m.type === 'mansion' ? 4 + i * 3 : null,
-      totalFloors: m.type === 'mansion' ? 20 : null,
-      station: m.station,
-      stationMinutes: m.stationMinutes,
-      description: `REINS掲載物件。${m.city}エリア。信頼性の高い不動産流通機構の登録物件。`,
-      features: m.type === 'tochi'   ? ['建築条件なし', '更地渡し', '即引渡可'] :
-                m.type === 'kodate'  ? ['駐車場2台', '収納充実', '閑静な住宅地'] :
-                                       ['新築', '免震構造', '24時間管理'],
-      latitude:  m.lat + (i - 1) * 0.01,
-      longitude: m.lng + (i - 1) * 0.01,
-    }));
+    return mockProperties.map((m, i) => {
+      const fingerprint = this.computeFingerprint({ prefecture, city: m.city, price: m.price, area: m.area ?? null, rooms: m.rooms });
+      return this.buildBaseProperty({
+        sitePropertyId: `mock_${prefecture}_reins_${i}`,
+        title: m.title,
+        propertyType: m.type,
+        prefecture,
+        city: m.city,
+        detailUrl: `https://www.reins.or.jp/search/?prefecture=${prefecture}`,
+        price: m.price,
+        priceText: `${m.price.toLocaleString()}万円`,
+        area: m.area ?? null,
+        buildingArea: m.area ?? null,
+        landArea: m.landArea ?? null,
+        rooms: m.rooms,
+        age: m.age,
+        floor: m.type === 'mansion' ? 4 + i * 3 : null,
+        totalFloors: m.type === 'mansion' ? 20 : null,
+        station: m.station,
+        stationMinutes: m.stationMinutes,
+        description: `REINS掲載物件。${m.city}エリア。信頼性の高い不動産流通機構の登録物件。`,
+        features: m.type === 'tochi'   ? ['建築条件なし', '更地渡し', '即引渡可'] :
+                  m.type === 'kodate'  ? ['駐車場2台', '収納充実', '閑静な住宅地'] :
+                                         ['新築', '免震構造', '24時間管理'],
+        latitude:  m.lat + (i - 1) * 0.01,
+        longitude: m.lng + (i - 1) * 0.01,
+        fingerprint,
+        managementFee: null,
+        repairFund: null,
+        direction: null,
+        structure: null,
+        floorPlanUrl: null,
+        exteriorUrl: null,
+        lastSeenAt: null,
+      });
+    });
   }
 }

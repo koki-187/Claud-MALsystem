@@ -194,6 +194,61 @@ export abstract class BaseScraper {
     return `${this.siteId}_${sitePropertyId}`;
   }
 
+  /** クロスサイト重複検知フィンガープリント計算 */
+  protected computeFingerprint(fields: {
+    prefecture: string;
+    city: string;
+    price: number | null;
+    area: number | null;
+    rooms: string | null;
+  }): string {
+    // 正規化してハッシュ
+    const norm = [
+      fields.prefecture,
+      fields.city.replace(/[市区町村]/g, '').slice(0, 4),  // 市区 → 4文字
+      String(Math.round((fields.price ?? 0) / 100) * 100),   // 100万単位丸め
+      String(Math.round((fields.area ?? 0) * 10) / 10),      // 小数1桁
+      (fields.rooms ?? '').replace(/[・\s]/g, '').toUpperCase(),
+    ].join('|');
+    // 簡易ハッシュ (Workers環境でcryptoなしでも動く)
+    let h = 0x811c9dc5;
+    for (let i = 0; i < norm.length; i++) {
+      h ^= norm.charCodeAt(i);
+      h = (h * 0x01000193) >>> 0;
+    }
+    return h.toString(16).padStart(8, '0');
+  }
+
+  /** 管理費・修繕積立金パース: "管理費12,000円" → 12000 */
+  protected extractMonthlyFee(text: string, keyword: string): number | null {
+    const m = text.match(new RegExp(keyword + '[^0-9]*([0-9,]+)'));
+    return m ? parseInt(m[1].replace(/,/g, '')) : null;
+  }
+
+  /** 向き抽出: "南向き" "南西" など */
+  protected extractDirection(text: string): string | null {
+    const m = text.match(/[南北東西][南北東西]?向き?/);
+    return m ? m[0] : null;
+  }
+
+  /** 構造抽出: "RC造" "木造" "SRC造" "鉄骨造" など */
+  protected extractStructure(text: string): string | null {
+    const m = text.match(/(?:RC|SRC|鉄筋コンクリート|鉄骨鉄筋|鉄骨|木造|軽量鉄骨|ブロック)造?/);
+    return m ? m[0] : null;
+  }
+
+  /** 間取り図URL抽出 */
+  protected extractFloorPlanUrl(html: string): string | null {
+    const m = html.match(/<img[^>]+src="([^"]*madori[^"]*\.(?:jpg|png)[^"]*)"/i);
+    return m ? m[1] : null;
+  }
+
+  /** 外観URL抽出 */
+  protected extractExteriorUrl(html: string): string | null {
+    const m = html.match(/<img[^>]+(?:alt|src)="[^"]*(?:外観|external|building)[^"]*"[^>]*src="([^"]+)"|<img[^>]+src="([^"]*(?:外観|external|building)[^"]*)"/i);
+    return m ? (m[1] ?? m[2]) : null;
+  }
+
   protected buildBaseProperty(overrides: Partial<Property> & {
     sitePropertyId: string;
     title: string;
@@ -218,8 +273,15 @@ export abstract class BaseScraper {
       totalFloors: null,
       station: null,
       stationMinutes: null,
+      fingerprint: null,
+      managementFee: null,
+      repairFund: null,
+      direction: null,
+      structure: null,
       images: [],
       thumbnailUrl: null,
+      floorPlanUrl: null,
+      exteriorUrl: null,
       description: null,
       features: [],
       latitude: null,
@@ -228,6 +290,7 @@ export abstract class BaseScraper {
       yieldRate: null,
       listedAt: null,
       soldAt: null,
+      lastSeenAt: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       scrapedAt: new Date().toISOString(),

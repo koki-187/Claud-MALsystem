@@ -29,7 +29,7 @@ export class SuumoScraper extends BaseScraper {
       try {
         const card = match[1];
         const titleMatch = card.match(/<dt[^>]*class="[^"]*cassette_title[^"]*"[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>\s*([^<]+)/);
-        const priceMatch = card.match(/(\d[,\d]*万円)/);
+        const priceMatch = card.match(/管理費：(\d[,\d]*)円/) ?? card.match(/(\d[,\d]*万円)/);
         const areaMatch  = card.match(/(\d+(?:\.\d+)?)\s*m²/);
         const roomsMatch = card.match(/(\d[LDKSR]+)/);
         const imgMatch   = card.match(/<img[^>]+src="(https?:\/\/[^"]+\.(?:jpg|jpeg|png|webp)[^"]*)"/i);
@@ -38,17 +38,26 @@ export class SuumoScraper extends BaseScraper {
 
         const detailUrl = `https://suumo.jp${titleMatch[1]}`;
         const title = titleMatch[2].trim();
-        const { price, priceText } = this.extractPrice(priceMatch?.[1] ?? '');
+        const { price, priceText } = this.extractPrice(card.match(/(\d[,\d]*万円)/)?.[1] ?? '');
         const area = this.extractArea(areaMatch?.[0] ?? '');
         const { station, stationMinutes } = this.extractStation(card);
         const sitePropertyId = btoa(encodeURIComponent(detailUrl)).slice(0, 20);
+        const city = card.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+
+        // 管理費・修繕積立金 (SUUMO特有パターン)
+        const managementFeeMatch = card.match(/管理費：(\d[,\d]*)円/);
+        const repairFundMatch = card.match(/修繕積立金：(\d[,\d]*)円/);
+        const managementFee = managementFeeMatch ? parseInt(managementFeeMatch[1].replace(/,/g, '')) : null;
+        const repairFund = repairFundMatch ? parseInt(repairFundMatch[1].replace(/,/g, '')) : null;
+
+        const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms: roomsMatch?.[1] ?? null });
 
         properties.push(this.buildBaseProperty({
           sitePropertyId,
           title,
           propertyType: 'mansion',
           prefecture,
-          city: '',
+          city,
           detailUrl,
           price,
           priceText,
@@ -57,6 +66,14 @@ export class SuumoScraper extends BaseScraper {
           station,
           stationMinutes,
           thumbnailUrl: imgMatch?.[1] ?? null,
+          images: imgMatch?.[1] ? [imgMatch[1]] : [],
+          managementFee,
+          repairFund,
+          direction: this.extractDirection(card),
+          structure: this.extractStructure(card),
+          floorPlanUrl: this.extractFloorPlanUrl(card),
+          exteriorUrl: this.extractExteriorUrl(card),
+          fingerprint,
         }));
         count++;
       } catch { continue; }
@@ -72,27 +89,38 @@ export class SuumoScraper extends BaseScraper {
       { title: '渋谷区デザイナーズ 1LDK',        price:  7200, area: 48.0, rooms: '1LDK', age:  5, city: '渋谷区', station: '渋谷',   stationMinutes: 7, lat: 35.6580, lng: 139.7016 },
     ];
 
-    return mockProperties.map((m, i) => this.buildBaseProperty({
-      sitePropertyId: `mock_${prefecture}_suumo_${i}`,
-      title: m.title,
-      propertyType: 'mansion',
-      prefecture,
-      city: m.city,
-      detailUrl: `https://suumo.jp/ms/mansion/tokyo/sc_${prefecture}/`,
-      price: m.price,
-      priceText: `${m.price.toLocaleString()}万円`,
-      area: m.area,
-      buildingArea: m.area,
-      rooms: m.rooms,
-      age: m.age,
-      floor: 5 + i * 3,
-      totalFloors: 25,
-      station: m.station,
-      stationMinutes: m.stationMinutes,
-      description: `${m.city}の人気エリアに位置する${m.rooms}の物件です。`,
-      features: ['オートロック', '宅配ボックス', 'エレベーター'],
-      latitude:  m.lat + (i - 1) * 0.005,
-      longitude: m.lng + (i - 1) * 0.005,
-    }));
+    return mockProperties.map((m, i) => {
+      const fingerprint = this.computeFingerprint({ prefecture, city: m.city, price: m.price, area: m.area, rooms: m.rooms });
+      return this.buildBaseProperty({
+        sitePropertyId: `mock_${prefecture}_suumo_${i}`,
+        title: m.title,
+        propertyType: 'mansion',
+        prefecture,
+        city: m.city,
+        detailUrl: `https://suumo.jp/ms/mansion/tokyo/sc_${prefecture}/`,
+        price: m.price,
+        priceText: `${m.price.toLocaleString()}万円`,
+        area: m.area,
+        buildingArea: m.area,
+        rooms: m.rooms,
+        age: m.age,
+        floor: 5 + i * 3,
+        totalFloors: 25,
+        station: m.station,
+        stationMinutes: m.stationMinutes,
+        description: `${m.city}の人気エリアに位置する${m.rooms}の物件です。`,
+        features: ['オートロック', '宅配ボックス', 'エレベーター'],
+        latitude:  m.lat + (i - 1) * 0.005,
+        longitude: m.lng + (i - 1) * 0.005,
+        fingerprint,
+        managementFee: null,
+        repairFund: null,
+        direction: null,
+        structure: null,
+        floorPlanUrl: null,
+        exteriorUrl: null,
+        lastSeenAt: null,
+      });
+    });
   }
 }

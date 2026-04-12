@@ -1,4 +1,4 @@
-// MAL System - Type Definitions v6.0
+// MAL System - Type Definitions v6.2
 
 export type PrefectureCode =
   | '01' | '02' | '03' | '04' | '05' | '06' | '07' | '08' | '09' | '10'
@@ -59,6 +59,7 @@ export interface Property {
   id: string;
   siteId: SiteId;
   sitePropertyId: string;
+  fingerprint: string | null;       // クロスサイト重複検知ハッシュ
   title: string;
   propertyType: PropertyType;
   status: PropertyStatus;
@@ -76,17 +77,24 @@ export interface Property {
   totalFloors: number | null;
   station: string | null;
   stationMinutes: number | null;
+  managementFee: number | null;     // 管理費 (円/月)
+  repairFund: number | null;        // 修繕積立金 (円/月)
+  direction: string | null;         // 向き (南向き等)
+  structure: string | null;         // 構造 (RC造等)
   images: string[];
   thumbnailUrl: string | null;
+  floorPlanUrl: string | null;      // 間取り図URL
+  exteriorUrl: string | null;       // 外観画像URL
   detailUrl: string;
   description: string | null;
   features: string[];
-  yieldRate: number | null;      // 表面利回り % (投資物件)
+  yieldRate: number | null;         // 表面利回り % (投資物件)
   latitude: number | null;
   longitude: number | null;
   priceHistory: PriceHistoryEntry[];
-  listedAt: string | null;       // 掲載開始日
-  soldAt: string | null;         // 売却日
+  listedAt: string | null;          // 掲載開始日
+  soldAt: string | null;            // 売却日
+  lastSeenAt: string | null;        // 最後にスクレイプ確認された日時
   createdAt: string;
   updatedAt: string;
   scrapedAt: string;
@@ -110,8 +118,10 @@ export interface SearchParams {
   rooms?: string;
   ageMax?: number;
   stationMinutes?: number;
-  yieldMin?: number;             // 利回り下限
+  yieldMin?: number;                // 利回り下限
+  managementFeeMax?: number;        // 管理費上限
   sites?: SiteId[];
+  hideDuplicates?: boolean;         // クロスサイト重複を非表示
   sortBy?: 'price_asc' | 'price_desc' | 'area_asc' | 'area_desc' | 'newest' | 'relevance' | 'yield_desc';
   page?: number;
   limit?: number;
@@ -140,7 +150,7 @@ export interface ScrapeJob {
   id: string;
   siteId: SiteId;
   prefecture: PrefectureCode;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped_mock';
   propertiesFound: number;
   propertiesNew: number;
   propertiesUpdated: number;
@@ -150,18 +160,51 @@ export interface ScrapeJob {
   completedAt?: string;
 }
 
-export interface PricePrediction {
+export interface DownloadQueueItem {
+  id: string;
+  assetType: 'image' | 'mysoku';
   propertyId: string;
-  predictedPrice: number;
-  confidence: number;
-  factors: PriceFactor[];
-  predictedAt: string;
+  sourceUrl: string;
+  r2Key: string | null;
+  status: 'pending' | 'processing' | 'done' | 'failed' | 'skipped';
+  retryCount: number;
+  errorMessage: string | null;
+  createdAt: string;
+  processedAt: string | null;
 }
 
-export interface PriceFactor {
-  name: string;
-  impact: number;
-  description: string;
+export interface CsvImport {
+  id: string;
+  filename: string;
+  source: 'manual' | 'scheduled';
+  totalRows: number;
+  importedRows: number;
+  updatedRows: number;
+  skippedRows: number;
+  errorRows: number;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  errorLog: string | null;
+  importedAt: string;
+  completedAt: string | null;
+}
+
+export interface AdminStats {
+  totalProperties: number;
+  activeProperties: number;
+  soldProperties: number;
+  delistedProperties: number;
+  duplicateGroups: number;
+  totalImages: number;
+  downloadedImages: number;
+  pendingDownloads: number;
+  totalMysoku: number;
+  totalTransactions: number;
+  r2StorageEstimatedMb: number;
+  dbSizeEstimatedMb: number;
+  siteBreakdown: { siteId: SiteId; count: number; sold: number }[];
+  prefectureBreakdown: { prefecture: PrefectureCode; count: number }[];
+  lastScrapeAt: string | null;
+  lastCsvImportAt: string | null;
 }
 
 export interface Bindings {
@@ -175,6 +218,10 @@ export interface Bindings {
   RATE_LIMIT_PER_MINUTE: string;
   /** Comma-separated prefecture codes to override PREFECTURE_ROTATION. Optional. */
   SCRAPE_PREFECTURES?: string;
+  /** Worker self-call URL for scheduled image download queue. Optional. */
+  WORKER_URL?: string;
+  /** Admin API bearer token. Optional. */
+  ADMIN_SECRET?: string;
 }
 
 export interface AppVariables {

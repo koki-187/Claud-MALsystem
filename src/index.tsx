@@ -7,6 +7,7 @@ import type { Bindings, AppVariables } from './types';
 import { searchProperties, getPropertyById, getStats, logSearch } from './db/queries';
 import { aggregateSearch, runScheduledScrape } from './scrapers/aggregator';
 import { PREFECTURES, SITES } from './types';
+import { admin as adminRoutes } from './routes/admin';
 
 const app = new Hono<{ Bindings: Bindings; Variables: AppVariables }>();
 
@@ -158,6 +159,26 @@ app.get('/api/suggest', async (c) => {
   }
 });
 
+app.get('/api/transactions', async (c) => {
+  const prefecture = c.req.query('prefecture') ?? '13';
+  const limit = Math.min(parseInt(c.req.query('limit') ?? '20'), 100);
+  try {
+    const rows = await c.env.MAL_DB.prepare(`
+      SELECT * FROM transaction_records
+      WHERE prefecture = ?
+      ORDER BY sold_at DESC LIMIT ?
+    `).bind(prefecture, limit).all();
+    return c.json({ transactions: rows.results ?? [], total: rows.results?.length ?? 0 });
+  } catch {
+    return c.json({ transactions: [], total: 0 });
+  }
+});
+
+// =====================
+// Admin Routes
+// =====================
+app.route('/api/admin', adminRoutes);
+
 // =====================
 // Frontend
 // =====================
@@ -167,7 +188,18 @@ app.get('*', (c) => c.html(getHTML()));
 // Cloudflare Cron Handler
 // =====================
 const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) => {
-  ctx.waitUntil(runScheduledScrape(env));
+  const hour = new Date(event.scheduledTime).getUTCHours();
+  if (hour === 4) {
+    // 画像ダウンロードキュー処理 (UTC 4時 = JST 13時)
+    ctx.waitUntil(
+      fetch(`${env.WORKER_URL ?? 'http://localhost:8787'}/api/admin/download-queue/process`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${env.ADMIN_SECRET ?? ''}` },
+      }).catch(console.error)
+    );
+  } else {
+    ctx.waitUntil(runScheduledScrape(env));
+  }
 };
 
 export default { fetch: app.fetch, scheduled };
@@ -680,6 +712,51 @@ img { max-width: 100%; }
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--c-bg); }
 ::-webkit-scrollbar-thumb { background: var(--c-border2); border-radius: 3px; }
+
+/* ── Export Bar ── */
+.export-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.btn-export {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 16px; border-radius: 10px;
+  background: var(--c-success); color: #fff;
+  font-size: 13px; font-weight: 700;
+  transition: opacity var(--transition);
+  border: none; cursor: pointer;
+}
+.btn-export:hover { opacity: .85; }
+.btn-admin {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 16px; border-radius: 10px;
+  background: var(--c-bg2); border: 1px solid var(--c-border);
+  color: var(--c-text2); font-size: 13px; font-weight: 700;
+  transition: all var(--transition); cursor: pointer;
+}
+.btn-admin:hover { border-color: var(--c-primary); color: var(--c-primary); }
+
+/* ── Tabs ── */
+.tab-bar { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 2px solid var(--c-border); }
+.tab-btn {
+  padding: 8px 18px; border-radius: 8px 8px 0 0;
+  font-size: 13px; font-weight: 700; color: var(--c-text3);
+  border: none; background: none; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -2px;
+  transition: all var(--transition);
+}
+.tab-btn.active { color: var(--c-primary); border-bottom-color: var(--c-primary); background: var(--c-bg2); }
+.tab-btn:hover:not(.active) { color: var(--c-text2); background: var(--c-bg2); }
+
+/* ── Transaction Table ── */
+.txn-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.txn-table th { background: var(--c-bg2); font-size: 11px; font-weight: 700; color: var(--c-text3); text-transform: uppercase; letter-spacing: .04em; padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--c-border); }
+.txn-table td { padding: 10px 12px; border-bottom: 1px solid var(--c-border); color: var(--c-text2); vertical-align: top; }
+.txn-table tr:last-child td { border-bottom: none; }
+.txn-table tr:hover td { background: var(--c-bg2); }
+
+/* ── Floor Plan & Gallery ── */
+.img-gallery { display: flex; gap: 6px; overflow-x: auto; margin-bottom: 12px; padding-bottom: 4px; }
+.gallery-img { width: 120px; height: 90px; object-fit: cover; border-radius: 8px; flex-shrink: 0; cursor: pointer; transition: opacity var(--transition); }
+.gallery-img:hover { opacity: .85; }
+.floor-plan { max-width: 200px; border-radius: 8px; border: 1px solid var(--c-border); }
   </style>
 </head>
 <body class="page-wrap">
@@ -841,6 +918,10 @@ img { max-width: 100%; }
 
     <!-- Actions -->
     <div class="actions-row">
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--c-text2);cursor:pointer">
+        <input type="checkbox" id="hideDuplicates" onchange="doSearch()" style="width:15px;height:15px;cursor:pointer">
+        重複非表示
+      </label>
       <div class="sort-row">
         <span class="sort-label">並び順:</span>
         <select id="sortBy" class="field-input" style="width:auto">
@@ -863,8 +944,24 @@ img { max-width: 100%; }
     </div>
   </div>
 
+  <!-- Export Bar -->
+  <div class="export-bar">
+    <button onclick="exportCSV()" class="btn-export">
+      📥 CSV ダウンロード
+    </button>
+    <button onclick="window.location.href='/api/admin/stats'" class="btn-admin">
+      📊 DB統計
+    </button>
+  </div>
+
   <!-- Active Filters -->
   <div class="filter-chips" id="filterChips"></div>
+
+  <!-- Tab Bar -->
+  <div class="tab-bar">
+    <button class="tab-btn active" id="tabProperties" onclick="switchTab('properties')">🏠 物件一覧</button>
+    <button class="tab-btn" id="tabTransactions" onclick="switchTab('transactions')">📋 成約事例</button>
+  </div>
 
   <!-- Results Bar -->
   <div class="results-bar" id="resultsBar">
@@ -894,6 +991,13 @@ img { max-width: 100%; }
 
   <!-- Pagination -->
   <div id="pagination" class="pagination"></div>
+
+  <!-- Transactions Panel -->
+  <div id="transactionsPanel" class="hidden">
+    <div id="transactionsContent">
+      <div style="text-align:center;padding:48px 0;color:var(--c-text3)">都道府県を選択して成約事例を表示します</div>
+    </div>
+  </div>
 
   <!-- Empty State -->
   <div id="emptyState" class="hidden state-center">
@@ -1053,6 +1157,7 @@ async function doSearch(page) {
   var ageMax = document.getElementById('ageMax').value;
   var sortBy = document.getElementById('sortBy').value;
   var sites = [].slice.call(document.querySelectorAll('.site-cb:checked')).map(function(cb) { return cb.value; });
+  var hideDuplicates = document.getElementById('hideDuplicates') && (document.getElementById('hideDuplicates') as HTMLInputElement).checked;
 
   if (query) q.set('q', query);
   if (pref) q.set('prefecture', pref);
@@ -1066,6 +1171,7 @@ async function doSearch(page) {
   if (rooms) q.set('rooms', rooms);
   if (stationMin) q.set('station_min', stationMin);
   if (ageMax) q.set('age_max', ageMax);
+  if (hideDuplicates) q.set('hide_duplicates', '1');
   if (sites.length > 0 && sites.length < 9) q.set('sites', sites.join(','));
   q.set('sort', sortBy);
   q.set('page', String(page));
@@ -1249,13 +1355,31 @@ function renderModal(p) {
   var priceStr = p.price ? p.price.toLocaleString() + '万円' : (p.priceText || '価格要相談');
   var prefName = PREF_DATA[p.prefecture] || '';
 
+  // 画像ギャラリー（最大5枚）
   var gallery = '';
   if (p.images && p.images.length > 0) {
-    gallery = '<div class="modal-gallery">'
-      + p.images.slice(0,6).map(function(img) {
-          return '<img src="' + escAttr(img) + '" alt="物件画像" loading="lazy" onerror="this.style.display=\'none\'">';
+    gallery = '<div class="img-gallery">'
+      + p.images.slice(0, 5).map(function(img) {
+          return '<img src="' + escAttr(img) + '" class="gallery-img" alt="物件画像" loading="lazy" onclick="openImg(\'' + escAttr(img) + '\')" onerror="this.style.display=\'none\'">';
         }).join('') + '</div>';
+  } else if (p.thumbnailUrl) {
+    gallery = '<div class="img-gallery"><img src="' + escAttr(p.thumbnailUrl) + '" class="gallery-img" alt="物件画像" loading="lazy" onerror="this.style.display=\'none\'"></div>';
   }
+
+  // 間取り図
+  var floorPlanHtml = p.floorPlanUrl
+    ? '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:700;color:var(--c-text3);letter-spacing:.04em;margin-bottom:6px">間取り図</div><img src="' + escAttr(p.floorPlanUrl) + '" class="floor-plan" alt="間取り図" loading="lazy" onerror="this.style.display=\'none\'"></div>'
+    : '';
+
+  // 費用・仕様情報
+  var feeItems = [];
+  if (p.managementFee) feeItems.push('管理費: ' + p.managementFee.toLocaleString() + '円/月');
+  if (p.repairFund) feeItems.push('修繕積立: ' + p.repairFund.toLocaleString() + '円/月');
+  if (p.direction) feeItems.push('向き: ' + p.direction);
+  if (p.structure) feeItems.push('構造: ' + p.structure);
+  var feesHtml = feeItems.length > 0
+    ? '<div style="margin-bottom:12px;font-size:12px;color:var(--c-text3)">' + feeItems.map(function(f){ return escHtml(f); }).join(' / ') + '</div>'
+    : '';
 
   var features = '';
   if (p.features && p.features.length > 0) {
@@ -1285,12 +1409,18 @@ function renderModal(p) {
     + (isSold ? '<div class="sold-banner"><i class="fas fa-lock mr-2"></i>この物件は売却済みです</div>' : '')
     + gallery
     + '<h2 style="font-size:18px;font-weight:800;margin-bottom:8px">' + escHtml(p.title) + '</h2>'
-    + '<div style="font-size:26px;font-weight:900;margin-bottom:16px;color:' + (isSold ? 'var(--c-text3)' : color) + '">' + (isSold ? '<span style="text-decoration:line-through">' : '') + escHtml(priceStr) + (isSold ? '</span>' : '') + '</div>'
+    + '<div style="font-size:26px;font-weight:900;margin-bottom:8px;color:' + (isSold ? 'var(--c-text3)' : color) + '">' + (isSold ? '<span style="text-decoration:line-through">' : '') + escHtml(priceStr) + (isSold ? '</span>' : '') + '</div>'
+    + feesHtml
     + detailGrid
+    + floorPlanHtml
     + features
     + desc
     + '<a href="' + escAttr(p.detailUrl) + '" target="_blank" rel="noopener noreferrer" class="modal-cta">'
     + '<i class="fas fa-external-link-alt mr-2"></i>' + escHtml(site.name || 'サイト') + 'で詳細を見る</a>';
+}
+
+function openImg(url) {
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 function closeModal() { document.getElementById('propertyModal').classList.add('hidden'); }
@@ -1438,6 +1568,91 @@ function escAttr(s) {
   if (!s) return '#';
   var safe = String(s).replace(/[<>"'\`]/g,function(c){return ({'"':'&quot;',"'":'&#39;','<':'&lt;','>':'&gt;','\`':'&#96;'})[c]||c;});
   return (/^https?:\\/\\//i.test(safe) || safe.startsWith('/') || safe === '#') ? safe : '#';
+}
+
+// ── CSV Export ──
+function exportCSV() {
+  var params = new URLSearchParams(window.location.search);
+  var pref = params.get('prefecture') || document.getElementById('prefecture').value || '13';
+  var url = '/api/admin/export.csv?prefecture=' + encodeURIComponent(pref) + '&status=active';
+  window.location.href = url;
+}
+
+// ── Tab Switching ──
+var currentTab = 'properties';
+function switchTab(tab) {
+  currentTab = tab;
+  document.getElementById('tabProperties').classList.toggle('active', tab === 'properties');
+  document.getElementById('tabTransactions').classList.toggle('active', tab === 'transactions');
+
+  var propEls = ['resultsBar', 'siteSummary', 'loadingState', 'resultsContainer', 'pagination', 'emptyState', 'initialState'];
+  propEls.forEach(function(id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    if (tab === 'properties') {
+      el.dataset.tabHidden = '';
+    } else {
+      el.dataset.tabHidden = '1';
+    }
+    if (tab !== 'properties') {
+      if (!el.classList.contains('hidden')) el.setAttribute('data-tab-visible', '1');
+      el.classList.add('hidden');
+    } else {
+      if (el.getAttribute('data-tab-visible') === '1') {
+        el.classList.remove('hidden');
+        el.removeAttribute('data-tab-visible');
+      }
+    }
+  });
+
+  var txPanel = document.getElementById('transactionsPanel');
+  txPanel.classList.toggle('hidden', tab !== 'transactions');
+
+  if (tab === 'transactions') {
+    var pref = document.getElementById('prefecture').value || '13';
+    loadTransactions(pref);
+  }
+}
+
+async function loadTransactions(prefecture) {
+  var content = document.getElementById('transactionsContent');
+  content.innerHTML = '<div style="text-align:center;padding:48px 0"><i class="fas fa-spinner fa-spin" style="font-size:32px;color:var(--c-primary)"></i></div>';
+  try {
+    var r = await fetch('/api/transactions?prefecture=' + encodeURIComponent(prefecture) + '&limit=50');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    var data = await r.json();
+    renderTransactions(data.transactions || [], prefecture);
+  } catch(e) {
+    content.innerHTML = '<div style="text-align:center;padding:48px 0;color:var(--c-text3)">成約事例データを取得できませんでした</div>';
+  }
+}
+
+function renderTransactions(rows, prefecture) {
+  var content = document.getElementById('transactionsContent');
+  var prefName = PREF_DATA[prefecture] || prefecture;
+  if (!rows.length) {
+    content.innerHTML = '<div style="text-align:center;padding:48px 0;color:var(--c-text3)">' + escHtml(prefName) + 'の成約事例はまだありません</div>';
+    return;
+  }
+  var html = '<div style="margin-bottom:12px;font-size:13px;font-weight:700">' + escHtml(prefName) + ' 成約事例 ' + rows.length + '件</div>'
+    + '<div style="overflow-x:auto"><table class="txn-table"><thead><tr>'
+    + '<th>成約日</th><th>物件名</th><th>種別</th><th>成約価格</th><th>面積</th><th>所在地</th>'
+    + '</tr></thead><tbody>'
+    + rows.map(function(t) {
+        var soldAt = t.sold_at ? String(t.sold_at).slice(0, 10) : '-';
+        var price = t.price ? Number(t.price).toLocaleString() + '万円' : (t.price_text || '-');
+        var area = t.area ? t.area + 'm²' : '-';
+        return '<tr>'
+          + '<td>' + escHtml(soldAt) + '</td>'
+          + '<td>' + escHtml(t.title || '') + '</td>'
+          + '<td>' + escHtml(t.property_type || '') + '</td>'
+          + '<td style="font-weight:700;color:var(--c-primary)">' + escHtml(price) + '</td>'
+          + '<td>' + escHtml(area) + '</td>'
+          + '<td>' + escHtml((t.city || '') + (t.address ? ' ' + t.address : '')) + '</td>'
+          + '</tr>';
+      }).join('')
+    + '</tbody></table></div>';
+  content.innerHTML = html;
 }
 
 // ── Init ──
