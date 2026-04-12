@@ -120,6 +120,20 @@ app.get('/api/health', (c) => c.json({
   timestamp: new Date().toISOString(),
 }));
 
+// PWA manifest
+app.get('/manifest.json', (c) => c.json({
+  name: 'MAL検索システム',
+  short_name: 'MAL',
+  description: '47都道府県・7サイト横断 不動産情報統合検索システム',
+  start_url: '/',
+  display: 'standalone',
+  background_color: '#f0f9ff',
+  theme_color: '#0ea5e9',
+  icons: [
+    { src: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌎</text></svg>", sizes: '192x192', type: 'image/svg+xml' },
+  ],
+}));
+
 // Search suggestions
 app.get('/api/suggest', async (c) => {
   const q = c.req.query('q') ?? '';
@@ -276,10 +290,12 @@ function getHTML(): string {
       <div class="lg:col-span-2">
         <label class="block text-xs font-semibold mb-1" style="color: var(--text-muted)">フリーワード検索</label>
         <div class="relative">
-          <input type="text" id="searchQuery" placeholder="物件名・住所・駅名で検索..."
+          <input type="search" id="searchQuery" placeholder="物件名・住所・駅名で検索..."
             class="w-full pl-10 pr-4 py-2.5 rounded-lg border text-sm"
             style="background: var(--bg); border-color: var(--border); color: var(--text)"
-            onkeydown="if(event.key==='Enter') doSearch()">
+            inputmode="search" autocomplete="off" list="citySuggestions"
+            oninput="onSearchInput()" onkeydown="if(event.key==='Enter') doSearch()">
+          <datalist id="citySuggestions"></datalist>
           <i class="fas fa-search absolute left-3 top-3 text-sm" style="color: var(--text-muted)"></i>
         </div>
       </div>
@@ -344,9 +360,9 @@ function getHTML(): string {
         </div>
       </div>
 
-      <div class="grid grid-cols-2 gap-2">
+      <div class="grid grid-cols-3 gap-2">
         <div>
-          <label class="block text-xs font-semibold mb-1" style="color: var(--text-muted)">間取り</label>
+          <label class="block text-xs font-semibold mb-1" style="color: var(--text-muted)">間取り(部屋数)</label>
           <select id="rooms" class="w-full py-2 px-2 rounded-lg border text-sm"
             style="background: var(--bg); border-color: var(--border); color: var(--text)">
             <option value="">すべて</option>
@@ -359,19 +375,37 @@ function getHTML(): string {
             <option value="2LDK">2LDK</option>
             <option value="3LDK">3LDK</option>
             <option value="4LDK">4LDK</option>
-            <option value="5LDK以上">5LDK+</option>
+            <option value="5LDK以上">5LDK以上</option>
           </select>
         </div>
         <div>
-          <label class="block text-xs font-semibold mb-1" style="color: var(--text-muted)">駅徒歩(分以内)</label>
+          <label class="block text-xs font-semibold mb-1" title="駅から徒歩何分以内の物件を探すか" style="color: var(--text-muted)">
+            最寄駅 徒歩 <i class="fas fa-info-circle text-xs"></i>
+          </label>
           <select id="stationMin" class="w-full py-2 px-2 rounded-lg border text-sm"
             style="background: var(--bg); border-color: var(--border); color: var(--text)">
             <option value="">制限なし</option>
-            <option value="3">3分</option>
-            <option value="5">5分</option>
-            <option value="10">10分</option>
-            <option value="15">15分</option>
-            <option value="20">20分</option>
+            <option value="3">3分以内</option>
+            <option value="5">5分以内</option>
+            <option value="10">10分以内</option>
+            <option value="15">15分以内</option>
+            <option value="20">20分以内</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs font-semibold mb-1" title="建物が建てられてから何年以内か" style="color: var(--text-muted)">
+            築年数 <i class="fas fa-info-circle text-xs"></i>
+          </label>
+          <select id="ageMax" class="w-full py-2 px-2 rounded-lg border text-sm"
+            style="background: var(--bg); border-color: var(--border); color: var(--text)">
+            <option value="">制限なし</option>
+            <option value="1">築1年以内(新築)</option>
+            <option value="3">築3年以内</option>
+            <option value="5">築5年以内</option>
+            <option value="10">築10年以内</option>
+            <option value="15">築15年以内</option>
+            <option value="20">築20年以内</option>
+            <option value="30">築30年以内</option>
           </select>
         </div>
       </div>
@@ -418,7 +452,7 @@ function getHTML(): string {
   </div>
 
   <!-- Results Header -->
-  <div class="flex items-center justify-between mb-4" id="resultsHeader" style="display:none!important">
+  <div class="flex items-center justify-between mb-4 hidden" id="resultsHeader">
     <div>
       <span id="resultCount" class="font-bold text-lg"></span>
       <span class="text-sm ml-2" id="executionTime" style="color: var(--text-muted)"></span>
@@ -464,11 +498,20 @@ function getHTML(): string {
     <div class="text-8xl mb-6">🌎</div>
     <h2 class="text-3xl font-bold mb-4 gradient-text">MAL検索システム</h2>
     <p class="text-lg mb-2" style="color: var(--text-muted)">47都道府県・7サイト横断 不動産情報統合検索</p>
-    <p class="text-sm mb-8" style="color: var(--text-muted)">SUUMO / HOME'S / AtHome / 不動産Japan / CHINTAI / Smaity / REINS</p>
-    <div class="flex justify-center gap-3 flex-wrap max-w-2xl mx-auto">
+    <p class="text-sm mb-6" style="color: var(--text-muted)">SUUMO / HOME'S / AtHome / 不動産Japan / CHINTAI / Smaity / REINS</p>
+
+    <!-- ガイド文 -->
+    <div class="inline-flex items-center gap-3 px-6 py-3 rounded-2xl mb-8 text-sm font-medium"
+      style="background: linear-gradient(135deg, #0ea5e920, #7c3aed20); border: 1px solid #0ea5e940; color: var(--text)">
+      <span class="text-xl">📍</span>
+      <span>まずは<strong>「都道府県」</strong>を選んで<strong>「検索する」</strong>を押してみてください！</span>
+      <i class="fas fa-arrow-up" style="color: var(--primary)"></i>
+    </div>
+
+    <div class="flex justify-center gap-3 flex-wrap max-w-2xl mx-auto mb-8">
       ${siteCardsInitial}
     </div>
-    <div class="mt-10 grid grid-cols-1 md:grid-cols-3 gap-4 max-w-2xl mx-auto text-sm">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 max-w-2xl mx-auto text-sm">
       <div class="card p-4 text-center">
         <div class="text-2xl mb-2">🔍</div>
         <p class="font-semibold mb-1">7サイト一括検索</p>
@@ -567,6 +610,7 @@ async function doSearch(page) {
   const areaMax = document.getElementById('areaMax').value;
   const rooms = document.getElementById('rooms').value;
   const stationMin = document.getElementById('stationMin').value;
+  const ageMax = document.getElementById('ageMax').value;
   const sortBy = document.getElementById('sortBy').value;
   const checkedSites = [...document.querySelectorAll('.site-cb:checked')].map(cb => cb.value);
 
@@ -579,6 +623,7 @@ async function doSearch(page) {
   if (areaMax) params.set('area_max', areaMax);
   if (rooms) params.set('rooms', rooms);
   if (stationMin) params.set('station_min', stationMin);
+  if (ageMax) params.set('age_max', ageMax);
   if (checkedSites.length > 0 && checkedSites.length < 7) params.set('sites', checkedSites.join(','));
   params.set('sort', sortBy);
   params.set('page', String(page));
@@ -615,7 +660,8 @@ function setLoading(loading) {
 
 function renderResults(data) {
   const header = document.getElementById('resultsHeader');
-  header.style.display = 'flex';
+  header.classList.remove('hidden');
+  header.style.display = '';
 
   document.getElementById('resultCount').textContent = (data.total || 0).toLocaleString() + '件の物件';
   const cacheInfo = data.cacheHit ? ' (キャッシュ)' : '';
@@ -929,11 +975,9 @@ function updateAreaLabel() {
 }
 
 function clearSearch() {
-  document.getElementById('searchQuery').value = '';
-  document.getElementById('priceMin').value = '';
-  document.getElementById('priceMax').value = '';
-  document.getElementById('areaMin').value = '';
-  document.getElementById('areaMax').value = '';
+  ['searchQuery','priceMin','priceMax','areaMin','areaMax'].forEach(function(id) {
+    document.getElementById(id).value = '';
+  });
   document.querySelectorAll('select').forEach(function(el) { el.selectedIndex = 0; });
   toggleAllSites(true);
   updatePriceLabel();
@@ -941,7 +985,7 @@ function clearSearch() {
   document.getElementById('resultsContainer').innerHTML = '';
   document.getElementById('pagination').innerHTML = '';
   document.getElementById('siteSummary').innerHTML = '';
-  document.getElementById('resultsHeader').style.display = 'none';
+  document.getElementById('resultsHeader').classList.add('hidden');
   document.getElementById('initialState').classList.remove('hidden');
   document.getElementById('emptyState').classList.add('hidden');
   currentResults = null;
@@ -958,7 +1002,7 @@ function showError(msg) {
     + '<button onclick="doSearch()" class="px-6 py-2.5 rounded-xl text-white search-btn-gradient">'
     + '<i class="fas fa-redo mr-2"></i>再試行</button>'
     + '</div>';
-  document.getElementById('resultsHeader').style.display = 'flex';
+  document.getElementById('resultsHeader').classList.remove('hidden');
   document.getElementById('resultCount').textContent = 'エラー';
   document.getElementById('executionTime').textContent = '';
 }
@@ -996,13 +1040,57 @@ function escAttr(str) {
     cb.addEventListener('change', updateSiteStyles);
   });
 
-  // Load stats for header
-  fetch('/api/stats').then(function(r) { return r.json(); }).then(function(stats) {
-    const total = stats.totalProperties || 0;
-    document.getElementById('totalCount').textContent = '📊 ' + total.toLocaleString() + '件登録済';
-    document.getElementById('statsBar').classList.remove('hidden');
-  }).catch(function() {});
+  // Escape key closes modals
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+      closeModal();
+      closeStatsModal();
+    }
+  });
+
+  // Load stats for header (5-minute localStorage cache)
+  (function loadStats() {
+    const STATS_CACHE_KEY = 'mal_stats_cache';
+    const STATS_CACHE_TTL = 5 * 60 * 1000;
+    try {
+      const cached = localStorage.getItem(STATS_CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Date.now() - parsed.ts < STATS_CACHE_TTL) {
+          document.getElementById('totalCount').textContent = '📊 ' + (parsed.total || 0).toLocaleString() + '件登録済';
+          document.getElementById('statsBar').classList.remove('hidden');
+          return;
+        }
+      }
+    } catch {}
+    fetch('/api/stats').then(function(r) { return r.json(); }).then(function(stats) {
+      const total = stats.totalProperties || 0;
+      document.getElementById('totalCount').textContent = '📊 ' + total.toLocaleString() + '件登録済';
+      document.getElementById('statsBar').classList.remove('hidden');
+      try { localStorage.setItem(STATS_CACHE_KEY, JSON.stringify({ total: total, ts: Date.now() })); } catch {}
+    }).catch(function() {});
+  })();
 })();
+
+// =====================
+// Autocomplete (debounce → /api/suggest)
+// =====================
+let suggestTimer = null;
+function onSearchInput() {
+  clearTimeout(suggestTimer);
+  suggestTimer = setTimeout(function() {
+    const q = document.getElementById('searchQuery').value.trim();
+    if (q.length < 2) return;
+    fetch('/api/suggest?q=' + encodeURIComponent(q))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        const dl = document.getElementById('citySuggestions');
+        dl.innerHTML = (data.suggestions || []).map(function(s) {
+          return '<option value="' + escAttr(s) + '">';
+        }).join('');
+      }).catch(function() {});
+  }, 300);
+}
 </script>
 </body>
 </html>`;

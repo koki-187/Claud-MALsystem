@@ -85,9 +85,12 @@ export async function searchProperties(
 
   const rows = await db
     .prepare(`
-      SELECT p.*, GROUP_CONCAT(pi.image_url) as images_concat
+      SELECT p.*,
+        GROUP_CONCAT(DISTINCT pi.image_url) as images_concat,
+        GROUP_CONCAT(DISTINCT pf.feature) as features_concat
       FROM properties p
       LEFT JOIN property_images pi ON pi.property_id = p.id
+      LEFT JOIN property_features pf ON pf.property_id = p.id
       ${whereSQL}
       GROUP BY p.id
       ORDER BY ${orderSQL}
@@ -129,9 +132,12 @@ export async function searchProperties(
 export async function getPropertyById(db: D1Database, id: string): Promise<Property | null> {
   const row = await db
     .prepare(`
-      SELECT p.*, GROUP_CONCAT(pi.image_url) as images_concat
+      SELECT p.*,
+        GROUP_CONCAT(DISTINCT pi.image_url) as images_concat,
+        GROUP_CONCAT(DISTINCT pf.feature) as features_concat
       FROM properties p
       LEFT JOIN property_images pi ON pi.property_id = p.id
+      LEFT JOIN property_features pf ON pf.property_id = p.id
       WHERE p.id = ?
       GROUP BY p.id
     `)
@@ -234,7 +240,7 @@ function rowToProperty(row: Record<string, unknown>): Property {
     thumbnailUrl: (row.thumbnail_url as string) ?? null,
     detailUrl: row.detail_url as string,
     description: (row.description as string) ?? null,
-    features: [],
+    features: row.features_concat ? (row.features_concat as string).split(',').filter(Boolean) : [],
     latitude: (row.latitude as number) ?? null,
     longitude: (row.longitude as number) ?? null,
     priceHistory: [],
