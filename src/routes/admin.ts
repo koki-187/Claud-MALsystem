@@ -4,40 +4,37 @@ import type { AdminStats, SiteId, PrefectureCode } from '../types';
 
 const admin = new Hono<{ Bindings: Bindings }>();
 
+/** Safely run a D1 query; returns null if the table doesn't exist yet (migration pending). */
+async function safeFirst<T>(stmt: D1PreparedStatement): Promise<T | null> {
+  try { return await stmt.first<T>(); } catch { return null; }
+}
+async function safeAll<T>(stmt: D1PreparedStatement): Promise<D1Result<T>> {
+  try { return await stmt.all<T>(); } catch { return { results: [], success: false, meta: {} as D1Meta }; }
+}
+
 // ─── GET /api/admin/stats ─────────────────────────────────────────────────────
 admin.get('/stats', async (c) => {
   const db = c.env.MAL_DB;
 
   const [
-    activeRow,
-    soldRow,
-    delistedRow,
-    totalRow,
-    dupRow,
-    totalImgRow,
-    dlImgRow,
-    pendingDlRow,
-    mysokuRow,
-    txnRow,
-    siteRows,
-    prefRows,
-    lastScrapeRow,
-    lastCsvRow,
+    activeRow, soldRow, delistedRow, totalRow, dupRow,
+    totalImgRow, dlImgRow, pendingDlRow, mysokuRow, txnRow,
+    siteRows, prefRows, lastScrapeRow, lastCsvRow,
   ] = await Promise.all([
-    db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active'`).first<{ cnt: number }>(),
-    db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='sold'`).first<{ cnt: number }>(),
-    db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='delisted'`).first<{ cnt: number }>(),
-    db.prepare(`SELECT COUNT(*) as cnt FROM properties`).first<{ cnt: number }>(),
-    db.prepare(`SELECT COUNT(DISTINCT fingerprint) as cnt FROM properties WHERE fingerprint IS NOT NULL`).first<{ cnt: number }>(),
-    db.prepare(`SELECT COUNT(*) as cnt FROM property_images`).first<{ cnt: number }>(),
-    db.prepare(`SELECT COUNT(*) as cnt FROM property_images WHERE download_status='downloaded'`).first<{ cnt: number }>(),
-    db.prepare(`SELECT COUNT(*) as cnt FROM download_queue WHERE status='pending'`).first<{ cnt: number }>(),
-    db.prepare(`SELECT COUNT(*) as cnt FROM property_mysoku`).first<{ cnt: number }>(),
-    db.prepare(`SELECT COUNT(*) as cnt FROM transaction_records`).first<{ cnt: number }>(),
-    db.prepare(`SELECT site_id, COUNT(*) as cnt, COUNT(CASE WHEN status='sold' THEN 1 END) as sold_cnt FROM properties GROUP BY site_id`).all<{ site_id: SiteId; cnt: number; sold_cnt: number }>(),
-    db.prepare(`SELECT prefecture, COUNT(*) as cnt FROM properties WHERE status='active' GROUP BY prefecture ORDER BY cnt DESC LIMIT 20`).all<{ prefecture: PrefectureCode; cnt: number }>(),
-    db.prepare(`SELECT MAX(completed_at) as val FROM scrape_jobs WHERE status='completed'`).first<{ val: string | null }>(),
-    db.prepare(`SELECT MAX(completed_at) as val FROM csv_imports WHERE status='completed'`).first<{ val: string | null }>(),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active'`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='sold'`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='delisted'`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(DISTINCT fingerprint) as cnt FROM properties WHERE fingerprint IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM property_images`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM property_images WHERE download_status='downloaded'`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM download_queue WHERE status='pending'`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM property_mysoku`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM transaction_records`)),
+    safeAll<{ site_id: SiteId; cnt: number; sold_cnt: number }>(db.prepare(`SELECT site_id, COUNT(*) as cnt, COUNT(CASE WHEN status='sold' THEN 1 END) as sold_cnt FROM properties GROUP BY site_id`)),
+    safeAll<{ prefecture: PrefectureCode; cnt: number }>(db.prepare(`SELECT prefecture, COUNT(*) as cnt FROM properties WHERE status='active' GROUP BY prefecture ORDER BY cnt DESC LIMIT 20`)),
+    safeFirst<{ val: string | null }>(db.prepare(`SELECT MAX(completed_at) as val FROM scrape_jobs WHERE status='completed'`)),
+    safeFirst<{ val: string | null }>(db.prepare(`SELECT MAX(completed_at) as val FROM csv_imports WHERE status='completed'`)),
   ]);
 
   const stats: AdminStats = {
