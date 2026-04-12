@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "MAL Dev Server (Wrangler Pages)",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:/temp/mal-dev/node_modules/wrangler/bin/wrangler.js", "dev", "C:/temp/mal-dev/src/index.tsx", "--config=C:/temp/mal-dev/wrangler.toml", "--compatibility-date=2024-09-23", "--local", "--port=8788"],
       "port": 8788
     },
     {
