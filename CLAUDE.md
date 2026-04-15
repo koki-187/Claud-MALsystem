@@ -82,6 +82,46 @@ wrangler deploy
 
 ---
 
+## セッション間同期プロトコル（必読）
+
+### セッション開始時に必ず実行すること
+**Desktop / Web / iOS すべてのセッションで、作業開始前に以下を実行：**
+
+1. `git fetch origin` で全ブランチの最新状態を取得
+2. `BUILD_LOG.md` を確認し、他のセッションの最新の構築状況を把握
+3. 自分のブランチに他環境の変更がある場合は `git pull` でマージ
+4. 他のブランチに未マージの変更がないか `git log` で確認
+
+### 作業完了時に必ず実行すること
+1. `BUILD_LOG.md` に今回の作業内容を追記（日時・環境・内容）
+2. `git add . && git commit && git push` で変更をプッシュ
+3. 大きな変更の場合、コミットメッセージに変更の要約を詳細に記載
+
+### BUILD_LOG.md の書式
+```markdown
+## YYYY-MM-DD HH:MM (環境名)
+- **環境**: Desktop / Web / iOS
+- **ブランチ**: master / remote/xxx / claude/xxx
+- **変更内容**: 変更の概要
+- **デプロイ**: 済 / 未 / 不要
+- **次のタスク**: 次に必要な作業（あれば）
+```
+
+### 構築状況の確認方法
+どのセッションからでも以下で最新状況を確認可能：
+```bash
+# 全ブランチの最新コミットを確認
+git fetch origin && git branch -a -v
+
+# BUILD_LOG.md で他セッションの作業内容を確認
+cat BUILD_LOG.md
+
+# masterとの差分を確認
+git log origin/master..HEAD --oneline
+```
+
+---
+
 ## リモート開発ルール (Desktop / Web / iOS共通)
 
 ### 基本原則
