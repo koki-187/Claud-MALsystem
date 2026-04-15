@@ -1,57 +1,84 @@
-# Claud-MALsystem
+# MAL検索システム v6.2
 
-## Project Overview
-MAL (MyAnimeList) system powered by Claude Code. This project is designed for remote development from Claude Code Web (browser) and iOS environments.
+## プロジェクト概要
+不動産物件検索システム。Hono + Cloudflare Workers + D1 + KV + R2 構成。
+47都道府県×9サイト対応。TERASS PICKSデータ619,063件インポート済み。
 
-## Development Environment
+## 技術スタック
+- **Runtime**: Cloudflare Workers
+- **Framework**: Hono
+- **Database**: Cloudflare D1 (SQLite互換)
+- **Cache**: Cloudflare KV (`mal-search-cache`)
+- **Storage**: Cloudflare R2 (`real-estate-files`)
+- **Language**: TypeScript
 
-### Remote Access
+## リソースID
+- **D1 DB**: `2a731ee6-d1c7-4f51-8bcc-f15f993ad870` (mal-search-db)
+- **KV**: `91469fbf31a04241a54e0acdcb7b14c2` (mal-search-cache)
+- **Worker URL**: `https://mal-search-system.navigator-187.workers.dev`
+- **GitHub**: `koki-187/Claud-MALsystem` (master branch)
+
+## ディレクトリ構造
+```
+src/
+  index.tsx          # エントリーポイント (Hono app + フロントエンドHTML)
+  types/index.ts     # TypeScript型定義・定数
+  db/queries.ts      # D1データベースクエリ関数
+  routes/
+    admin.ts         # 管理API (/api/admin/*)
+  scrapers/
+    base.ts          # ベーススクレイパークラス
+    aggregator.ts    # 全サイト並列スクレイピング
+    suumo.ts         # SUUMO
+    homes.ts         # HOME'S
+    athome.ts        # AtHome
+    fudosan.ts       # 不動産Japan
+    chintai.ts       # CHINTAI
+    smaity.ts        # Smaity
+    reins.ts         # REINS
+    kenbiya.ts       # 健美家
+    rakumachi.ts     # 楽待
+migrations/
+  0001_initial.sql
+  0002_status_sites.sql
+  0003_mysoku_seiyaku.sql
+  0004_fingerprint_queue.sql
+  seed.sql
+scripts/               # リモート開発用スクリプト
+  health-check.sh      # 環境ヘルスチェック
+  auto-push.sh         # コミット後自動プッシュ
+  test.sh / lint.sh
+wrangler.toml          # Cloudflare設定 (実リソースID設定済み)
+```
+
+## 重要な注意事項
+- `wrangler.toml` のリソースIDは本番環境の実IDです。変更しないでください。
+- D1の `properties` テーブルは `detail_url TEXT NOT NULL` — INSERT時にNULLを渡すと `INSERT OR IGNORE` で無視されます。空文字 `''` を使用してください。
+- `UNIQUE(site_id, site_property_id)` 制約があります。
+
+## コマンド
+
+### ビルド＆テスト（リモート環境）
+```bash
+./scripts/health-check.sh   # 環境ヘルスチェック
+./scripts/test.sh            # テスト実行
+./scripts/lint.sh            # リントチェック
+```
+
+### デプロイ（デスクトップ環境のみ）
+```bash
+# Google Driveパスではnpm installが失敗するため、ローカルコピーを使用
+cp -r . C:/Users/reale/Downloads/mal-worker/
+cd C:/Users/reale/Downloads/mal-worker/
+npm install
+wrangler deploy
+```
+
+## リモート開発環境
 - **Browser**: Claude Code Web (claude.ai/code)
 - **iOS**: Claude iOS App → Claude Code
-- Both environments connect to the same remote container
-
-### Branch Strategy
-- `main`: Stable branch
-- Feature branches: `claude/*` prefix for Claude Code sessions
-
-## Commands
-
-### Build & Test
-```bash
-# Run all tests
-./scripts/test.sh
-
-# Lint check
-./scripts/lint.sh
-
-# Health check (verify environment is ready)
-./scripts/health-check.sh
-```
-
-## Project Structure
-```
-.
-├── CLAUDE.md              # This file - Claude Code instructions
-├── README.md              # Project overview
-├── .claude/
-│   └── settings.json      # Claude Code settings & hooks
-├── scripts/
-│   ├── health-check.sh    # Environment health check
-│   ├── test.sh            # Test runner
-│   ├── lint.sh            # Lint runner
-│   └── auto-push.sh       # Auto-push after task completion
-└── src/                   # Source code (to be developed)
-```
-
-## Conventions
-- Commit messages: Japanese or English, concise description of changes
-- Auto-push is enabled via PostToolUse hook — every successful commit is automatically pushed
-- All scripts must be executable (`chmod +x`)
-
-## Notes for Remote Sessions
-- The session start hook runs `health-check.sh` to verify the environment
-- Git is pre-configured with the remote origin
-- Always work on the designated feature branch
+- **自動プッシュ**: PostToolUse フックで `git commit` 後に自動 `git push`
+- **セッション開始フック**: `health-check.sh` で環境を自動検証
 
 ---
 
@@ -63,25 +90,24 @@ MAL (MyAnimeList) system powered by Claude Code. This project is designed for re
 3. **コンフリクト防止**: 同一ファイルをデスクトップとリモートで同時編集しない
 
 ### 環境別の制約
-
-| 操作 | Desktop | Web/iOS |
-|------|---------|---------|
+| 操作 | Desktop (Claude Code) | Web/iOS (Claude Code Remote) |
+|------|----------------------|------------------------------|
 | コード編集 | OK | OK |
 | git push/pull | OK | OK |
-| wrangler deploy | OK | **NG** (CLIなし) |
-| D1マイグレーション | OK | **NG** |
+| wrangler deploy | OK | NG (CLIなし) |
+| D1マイグレーション | OK | NG |
 | npm install | OK | 要確認 |
 
 ### ブランチ戦略
 - **master**: 本番デプロイ用。安定コードのみ。
-- **remote/\***: リモート版での作業用ブランチ (例: `remote/feature-xxx`)
+- **remote/***: リモート版での作業用ブランチ (例: `remote/feature-xxx`)
 - リモート版での大きな変更は `remote/` ブランチで作業し、デスクトップ版でmasterにマージ＆デプロイ
 
 ### デプロイフロー
 ```
 [リモート版] コード変更 → git push (remote/ブランチ)
     ↓
-[デスクトップ版] git pull → レビュー → masterにマージ → wrangler deploy
+[デスクトップ版] git pull → レビュー → master にマージ → wrangler deploy
 ```
 
 ### 禁止事項

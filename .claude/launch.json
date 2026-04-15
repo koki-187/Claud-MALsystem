@@ -1,0 +1,35 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "MAL Dev Server (Wrangler Pages)",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["C:/temp/mal-dev/node_modules/wrangler/bin/wrangler.js", "dev", "C:/temp/mal-dev/src/index.tsx", "--config=C:/temp/mal-dev/wrangler.toml", "--compatibility-date=2024-09-23", "--local", "--port=8788"],
+      "port": 8788
+    },
+    {
+      "name": "MAL Build",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "build"],
+      "port": 0
+    },
+    {
+      "name": "MAL DB Migrate",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "db:migrate"],
+      "port": 0
+    },
+    {
+      "name": "MAL DB Seed",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "db:seed"],
+      "port": 0
+    },
+    {
+      "name": "MAL Deploy (Cloudflare Pages)",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "deploy"],
+      "port": 0
+    }
+  ]
+}
