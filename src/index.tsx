@@ -248,7 +248,7 @@ function getHTML(): string {
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous">
   <style>
 /* ==========================================
-   MAL v6.0 — Design System
+   MAL v7.0 — Design System
    ========================================== */
 :root {
   --c-primary: #2563eb;
@@ -541,6 +541,18 @@ img { max-width: 100%; }
   font-size: 11px; font-weight: 800;
   background: #dc2626; color: #fff;
 }
+.prop-quality-badge {
+  position: absolute; top: 10px; right: 10px;
+  padding: 3px 8px; border-radius: 20px;
+  font-size: 10px; font-weight: 800;
+  display: flex; align-items: center; gap: 3px;
+  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+}
+.prop-quality-badge.q-high { background: rgba(22,163,74,.88); color: #fff; }
+.prop-quality-badge.q-mid { background: rgba(217,119,6,.88); color: #fff; }
+.prop-quality-badge.q-low { background: rgba(100,116,139,.75); color: #fff; }
+.prop-specs-extra { font-size: 11px; color: var(--c-text4); display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.prop-specs-extra .prop-spec-item { color: var(--c-text4); }
 .prop-body { padding: 14px 16px 16px; }
 .prop-title {
   font-size: 14px; font-weight: 700; color: var(--c-text);
@@ -757,6 +769,26 @@ img { max-width: 100%; }
 .gallery-img { width: 120px; height: 90px; object-fit: cover; border-radius: 8px; flex-shrink: 0; cursor: pointer; transition: opacity var(--transition); }
 .gallery-img:hover { opacity: .85; }
 .floor-plan { max-width: 200px; border-radius: 8px; border: 1px solid var(--c-border); }
+.map-link {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 14px; border-radius: 8px;
+  background: var(--c-bg2); border: 1px solid var(--c-border);
+  color: var(--c-primary); font-size: 12px; font-weight: 700;
+  transition: all var(--transition); margin-bottom: 12px;
+}
+.map-link:hover { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
+.quality-meter { margin-bottom: 16px; }
+.quality-bar-wrap {
+  width: 100%; height: 8px; background: var(--c-bg2);
+  border-radius: 4px; overflow: hidden; margin-top: 6px;
+}
+.quality-bar {
+  height: 100%; border-radius: 4px;
+  transition: width .4s ease;
+}
+.quality-bar.q-high { background: linear-gradient(90deg, #16a34a, #22c55e); }
+.quality-bar.q-mid { background: linear-gradient(90deg, #d97706, #f59e0b); }
+.quality-bar.q-low { background: linear-gradient(90deg, #94a3b8, #cbd5e1); }
   </style>
 </head>
 <body class="page-wrap">
@@ -768,7 +800,7 @@ img { max-width: 100%; }
       <span class="logo-icon">🌎</span>
       <div>
         <div class="logo-text">MAL</div>
-        <div class="logo-sub">不動産一括検索 v6.0</div>
+        <div class="logo-sub">不動産一括検索 v7.0</div>
       </div>
     </div>
     <div class="header-spacer"></div>
@@ -1206,6 +1238,38 @@ function setLoading(on) {
     : '<i class="fas fa-search"></i>検索する';
 }
 
+function calcQuality(p) {
+  var score = 0;
+  if (p.title) score += 10;
+  if (p.price) score += 15;
+  if (p.area) score += 10;
+  if (p.rooms) score += 8;
+  if (p.age !== null && p.age !== undefined) score += 8;
+  if (p.address) score += 10;
+  if (p.station) score += 7;
+  if (p.stationMinutes) score += 5;
+  if (p.floor) score += 4;
+  if (p.totalFloors) score += 3;
+  if (p.structure) score += 5;
+  if (p.direction) score += 3;
+  if (p.buildingArea) score += 4;
+  if (p.landArea) score += 4;
+  if (p.latitude && p.longitude) score += 4;
+  return Math.min(score, 100);
+}
+
+function qualityClass(score) {
+  if (score >= 70) return 'q-high';
+  if (score >= 40) return 'q-mid';
+  return 'q-low';
+}
+
+function qualityLabel(score) {
+  if (score >= 70) return '高品質';
+  if (score >= 40) return '標準';
+  return '基本';
+}
+
 function renderResults(data) {
   var bar = document.getElementById('resultsBar');
   bar.classList.add('visible');
@@ -1263,12 +1327,29 @@ function renderCard(p) {
   if (p.rooms) specs.push('<span class="prop-spec-item"><i class="fas fa-door-open"></i>' + escHtml(p.rooms) + '</span>');
   if (p.area) specs.push('<span class="prop-spec-item"><i class="fas fa-ruler-combined"></i>' + p.area + 'm²</span>');
   if (p.age !== null && p.age !== undefined) specs.push('<span class="prop-spec-item"><i class="fas fa-calendar-alt"></i>築' + p.age + '年</span>');
-  if (p.floor) specs.push('<span class="prop-spec-item"><i class="fas fa-layer-group"></i>' + p.floor + '階</span>');
+  if (p.floor) {
+    var floorStr = p.floor + '階';
+    if (p.totalFloors) floorStr += '/' + p.totalFloors + '階建';
+    specs.push('<span class="prop-spec-item"><i class="fas fa-layer-group"></i>' + floorStr + '</span>');
+  }
+
+  // Additional specs row
+  var specsExtra = [];
+  if (p.structure) specsExtra.push('<span class="prop-spec-item"><i class="fas fa-building"></i>' + escHtml(p.structure) + '</span>');
+  if (p.direction) specsExtra.push('<span class="prop-spec-item"><i class="fas fa-compass"></i>' + escHtml(p.direction) + '</span>');
+  if (p.buildingArea && p.buildingArea !== p.area) specsExtra.push('<span class="prop-spec-item"><i class="fas fa-vector-square"></i>建物' + p.buildingArea + 'm²</span>');
+  if (p.landArea) specsExtra.push('<span class="prop-spec-item"><i class="fas fa-expand"></i>土地' + p.landArea + 'm²</span>');
+
+  // Quality badge
+  var qScore = calcQuality(p);
+  var qClass = qualityClass(qScore);
+  var qBadge = '<div class="prop-quality-badge ' + qClass + '"><i class="fas fa-star" style="font-size:9px"></i>' + qScore + '</div>';
 
   return '<div class="prop-card' + (isSold ? ' sold' : '') + '" onclick="showDetail(\'' + escAttr(p.id) + '\')">'
     + '<div class="prop-img-wrap">' + imgContent
     + '<div class="prop-badge-site" style="background:' + color + '">' + (site.logo || '') + ' ' + escHtml(site.name || p.siteId) + '</div>'
-    + (typeLabel ? '<div class="prop-badge-type">' + typeLabel + '</div>' : '')
+    + (typeLabel ? '<div class="prop-badge-type" style="right:auto;left:10px;top:40px">' + typeLabel + '</div>' : '')
+    + qBadge
     + newBadge + yieldBadge + soldOverlay
     + '</div>'
     + '<div class="prop-body">'
@@ -1276,6 +1357,7 @@ function renderCard(p) {
     + '<div class="prop-location"><i class="fas fa-map-marker-alt"></i>' + escHtml(prefName + ' ' + (p.city || '')) + (stationStr ? '<span style="margin-left:8px">' + stationStr + '</span>' : '') + '</div>'
     + '<div class="prop-price" style="color:' + (isSold ? 'var(--c-text3)' : color) + '">' + (isSold ? '<span style="font-size:14px;text-decoration:line-through">' : '') + escHtml(priceStr) + (isSold ? '</span>' : '') + '</div>'
     + '<div class="prop-specs">' + specs.join('') + '</div>'
+    + (specsExtra.length > 0 ? '<div class="prop-specs-extra">' + specsExtra.join('') + '</div>' : '')
     + '<div class="prop-footer">'
     + '<span style="font-size:11px;color:var(--c-text4)">' + formatDate(p.scrapedAt) + '</span>'
     + '<a href="' + escAttr(p.detailUrl) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="prop-ext-link" style="background:' + color + '18;color:' + color + '">'
@@ -1375,11 +1457,28 @@ function renderModal(p) {
   var feeItems = [];
   if (p.managementFee) feeItems.push('管理費: ' + p.managementFee.toLocaleString() + '円/月');
   if (p.repairFund) feeItems.push('修繕積立: ' + p.repairFund.toLocaleString() + '円/月');
-  if (p.direction) feeItems.push('向き: ' + p.direction);
-  if (p.structure) feeItems.push('構造: ' + p.structure);
   var feesHtml = feeItems.length > 0
     ? '<div style="margin-bottom:12px;font-size:12px;color:var(--c-text3)">' + feeItems.map(function(f){ return escHtml(f); }).join(' / ') + '</div>'
     : '';
+
+  // 品質スコア
+  var qScore = calcQuality(p);
+  var qClass = qualityClass(qScore);
+  var qLbl = qualityLabel(qScore);
+  var qualityHtml = '<div class="quality-meter">'
+    + '<div style="display:flex;justify-content:space-between;align-items:center">'
+    + '<span style="font-size:11px;font-weight:700;color:var(--c-text3)">データ品質スコア</span>'
+    + '<span style="font-size:13px;font-weight:800" class="' + qClass + '">' + qScore + '/100 (' + qLbl + ')</span>'
+    + '</div>'
+    + '<div class="quality-bar-wrap"><div class="quality-bar ' + qClass + '" style="width:' + qScore + '%"></div></div>'
+    + '</div>';
+
+  // 地図リンク
+  var mapHtml = '';
+  if (p.latitude && p.longitude) {
+    mapHtml = '<a href="https://www.google.com/maps?q=' + p.latitude + ',' + p.longitude + '" target="_blank" rel="noopener noreferrer" class="map-link" onclick="event.stopPropagation()">'
+      + '<i class="fas fa-map-marked-alt"></i>Google Mapsで見る (' + p.latitude.toFixed(3) + ', ' + p.longitude.toFixed(3) + ')</a>';
+  }
 
   var features = '';
   if (p.features && p.features.length > 0) {
@@ -1387,11 +1486,28 @@ function renderModal(p) {
       + '<div class="features-wrap">' + p.features.map(function(f) { return '<span class="feature-tag">' + escHtml(f) + '</span>'; }).join('') + '</div></div>';
   }
 
+  // 階数表示
+  var floorDisplay = '-';
+  if (p.floor) {
+    floorDisplay = p.floor + '階';
+    if (p.totalFloors) floorDisplay += ' / ' + p.totalFloors + '階建';
+  } else if (p.totalFloors) {
+    floorDisplay = p.totalFloors + '階建';
+  }
+
+  // 面積サブテキスト
+  var areaSub = [];
+  if (p.buildingArea && p.buildingArea !== p.area) areaSub.push('建物: ' + p.buildingArea + 'm²');
+  if (p.landArea) areaSub.push('土地: ' + p.landArea + 'm²');
+
   var details = [
     { label: '所在地', value: prefName + ' ' + (p.city || ''), sub: p.address },
     { label: 'アクセス', value: p.station || '-', sub: p.stationMinutes ? '徒歩' + p.stationMinutes + '分' : null },
-    p.area ? { label: '面積', value: p.area + 'm²', sub: p.buildingArea && p.buildingArea !== p.area ? '建物: ' + p.buildingArea + 'm²' : null } : null,
-    { label: '間取り', value: p.rooms || '-', sub: (p.age !== null && p.age !== undefined ? '築' + p.age + '年' : '') + (p.floor ? ' ' + p.floor + '階' : '') || null },
+    p.area ? { label: '面積', value: p.area + 'm²', sub: areaSub.length > 0 ? areaSub.join(' / ') : null } : null,
+    { label: '間取り', value: p.rooms || '-', sub: (p.age !== null && p.age !== undefined ? '築' + p.age + '年' : null) },
+    (p.floor || p.totalFloors) ? { label: '階数', value: floorDisplay, sub: null } : null,
+    p.structure ? { label: '構造', value: p.structure, sub: null } : null,
+    p.direction ? { label: '向き', value: p.direction, sub: null } : null,
     p.yieldRate ? { label: '表面利回り', value: p.yieldRate.toFixed(2) + '%', sub: '投資物件' } : null,
     { label: 'ステータス', value: isSold ? '売却済' : '販売中', sub: p.soldAt ? p.soldAt.slice(0,10) + ' 売却' : null },
   ].filter(Boolean);
@@ -1412,6 +1528,8 @@ function renderModal(p) {
     + '<div style="font-size:26px;font-weight:900;margin-bottom:8px;color:' + (isSold ? 'var(--c-text3)' : color) + '">' + (isSold ? '<span style="text-decoration:line-through">' : '') + escHtml(priceStr) + (isSold ? '</span>' : '') + '</div>'
     + feesHtml
     + detailGrid
+    + mapHtml
+    + qualityHtml
     + floorPlanHtml
     + features
     + desc
