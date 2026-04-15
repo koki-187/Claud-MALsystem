@@ -52,3 +52,40 @@ MAL (MyAnimeList) system powered by Claude Code. This project is designed for re
 - The session start hook runs `health-check.sh` to verify the environment
 - Git is pre-configured with the remote origin
 - Always work on the designated feature branch
+
+---
+
+## リモート開発ルール (Desktop / Web / iOS共通)
+
+### 基本原則
+1. **作業開始時**: 必ず `git pull origin master` で最新コードを取得
+2. **作業完了時**: 必ず `git add . && git commit && git push origin master` で変更をプッシュ
+3. **コンフリクト防止**: 同一ファイルをデスクトップとリモートで同時編集しない
+
+### 環境別の制約
+
+| 操作 | Desktop | Web/iOS |
+|------|---------|---------|
+| コード編集 | OK | OK |
+| git push/pull | OK | OK |
+| wrangler deploy | OK | **NG** (CLIなし) |
+| D1マイグレーション | OK | **NG** |
+| npm install | OK | 要確認 |
+
+### ブランチ戦略
+- **master**: 本番デプロイ用。安定コードのみ。
+- **remote/\***: リモート版での作業用ブランチ (例: `remote/feature-xxx`)
+- リモート版での大きな変更は `remote/` ブランチで作業し、デスクトップ版でmasterにマージ＆デプロイ
+
+### デプロイフロー
+```
+[リモート版] コード変更 → git push (remote/ブランチ)
+    ↓
+[デスクトップ版] git pull → レビュー → masterにマージ → wrangler deploy
+```
+
+### 禁止事項
+- リモート版から `wrangler.toml` のリソースIDを変更しない
+- `.env` や認証情報をコミットしない
+- `node_modules/` をコミットしない
+- masterブランチへの force push 禁止
