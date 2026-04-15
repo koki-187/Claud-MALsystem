@@ -9,17 +9,17 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "MAL_DB"
 database_name = "mal-search-db"
-database_id = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+database_id = "2a731ee6-d1c7-4f51-8bcc-f15f993ad870"
 migrations_dir = "migrations"
 
 [[kv_namespaces]]
 binding = "MAL_CACHE"
-id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-preview_id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+id = "91469fbf31a04241a54e0acdcb7b14c2"
+preview_id = "91469fbf31a04241a54e0acdcb7b14c2"
 
 [[r2_buckets]]
 binding = "MAL_STORAGE"
-bucket_name = "mal-property-images"
+bucket_name = "real-estate-files"
 
 [vars]
 ENVIRONMENT = "development"
