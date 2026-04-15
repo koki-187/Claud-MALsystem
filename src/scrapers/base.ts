@@ -1,4 +1,4 @@
-import type { SiteId, Property, PrefectureCode } from '../types';
+import type { SiteId, Property, PrefectureCode, PropertyType } from '../types';
 import { SITES } from '../types';
 
 export interface ScraperOptions {
@@ -11,6 +11,21 @@ export interface ScrapeContext {
   prefecture: PrefectureCode;
   page?: number;
   maxResults?: number;
+  /** When true, also fetch detail pages for richer data */
+  fetchDetails?: boolean;
+}
+
+/** Minimum quality thresholds for production data */
+export interface DataQualityReport {
+  totalProperties: number;
+  withPrice: number;
+  withArea: number;
+  withRooms: number;
+  withStation: number;
+  withAge: number;
+  withImages: number;
+  withAddress: number;
+  qualityScore: number; // 0-100
 }
 
 export abstract class BaseScraper {
@@ -24,15 +39,48 @@ export abstract class BaseScraper {
     this.options = {
       maxRetries: options.maxRetries ?? 3,
       timeoutMs: options.timeoutMs ?? 15000,
-      userAgent: options.userAgent ?? 'Mozilla/5.0 (compatible; MAL-Bot/6.0; +https://mal-system.pages.dev)',
+      userAgent: options.userAgent ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     };
   }
 
   abstract scrapeListings(ctx: ScrapeContext): Promise<Property[]>;
 
-  // Default no-op — subclasses override when they support detail scraping
+  /**
+   * Scrape a property detail page for enriched data.
+   * Subclasses should override to extract full details.
+   */
   async scrapeDetail(_url: string): Promise<Partial<Property>> {
     return {};
+  }
+
+  /**
+   * Assess data quality of scraped properties.
+   * Score = weighted average of field completeness.
+   */
+  assessQuality(properties: Property[]): DataQualityReport {
+    const n = properties.length;
+    if (n === 0) return { totalProperties: 0, withPrice: 0, withArea: 0, withRooms: 0, withStation: 0, withAge: 0, withImages: 0, withAddress: 0, qualityScore: 0 };
+
+    const withPrice   = properties.filter(p => p.price !== null).length;
+    const withArea    = properties.filter(p => p.area !== null).length;
+    const withRooms   = properties.filter(p => p.rooms !== null).length;
+    const withStation = properties.filter(p => p.station !== null).length;
+    const withAge     = properties.filter(p => p.age !== null).length;
+    const withImages  = properties.filter(p => p.thumbnailUrl !== null || p.images.length > 0).length;
+    const withAddress = properties.filter(p => p.address !== null && p.address !== '').length;
+
+    // Weighted: price(25) + area(20) + rooms(15) + station(15) + age(10) + images(10) + address(5)
+    const qualityScore = Math.round(
+      (withPrice / n) * 25 +
+      (withArea / n) * 20 +
+      (withRooms / n) * 15 +
+      (withStation / n) * 15 +
+      (withAge / n) * 10 +
+      (withImages / n) * 10 +
+      (withAddress / n) * 5
+    );
+
+    return { totalProperties: n, withPrice, withArea, withRooms, withStation, withAge, withImages, withAddress, qualityScore };
   }
 
   /**
@@ -110,6 +158,77 @@ export abstract class BaseScraper {
 
   protected sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Detect property type from title and surrounding text.
+   * Covers: mansion, kodate, tochi, chintai variants, investment, jimusho.
+   */
+  protected detectPropertyType(text: string): PropertyType {
+    const t = text.replace(/[\s　]/g, '');
+    // Investment / revenue properties
+    if (/(?:一棟|収益|利回り|投資用|オーナーチェンジ|賃貸中)/.test(t)) return 'investment';
+    // Rental
+    if (/(?:賃貸|月額|\/月|家賃)/.test(t)) {
+      if (/(?:一戸建|戸建|一軒家)/.test(t)) return 'chintai_ikkodate';
+      return 'chintai_mansion';
+    }
+    // Land
+    if (/(?:土地|更地|建築条件|分譲地|宅地)/.test(t) && !/(?:マンション|アパート|一戸建)/.test(t)) return 'tochi';
+    // Detached house
+    if (/(?:一戸建|戸建|一軒家|コテージ)/.test(t)) return 'kodate';
+    // Office / commercial
+    if (/(?:事務所|オフィス|テナント|店舗)/.test(t)) return 'jimusho';
+    // Default: mansion (apartment/condo)
+    return 'mansion';
+  }
+
+  /**
+   * Extract floor information: "3階/15階建" → { floor: 3, totalFloors: 15 }
+   */
+  protected extractFloor(text: string): { floor: number | null; totalFloors: number | null } {
+    // Pattern: "X階/Y階建" or "X階建"
+    const fullMatch = text.match(/(\d+)階\s*[/／]\s*(\d+)階建/);
+    if (fullMatch) {
+      return { floor: parseInt(fullMatch[1]), totalFloors: parseInt(fullMatch[2]) };
+    }
+    const totalMatch = text.match(/(\d+)階建/);
+    if (totalMatch) {
+      return { floor: null, totalFloors: parseInt(totalMatch[1]) };
+    }
+    const floorMatch = text.match(/(\d+)階(?!建)/);
+    if (floorMatch) {
+      return { floor: parseInt(floorMatch[1]), totalFloors: null };
+    }
+    return { floor: null, totalFloors: null };
+  }
+
+  /**
+   * Extract full address from text (prefecture + city + detail).
+   */
+  protected extractAddress(text: string): string | null {
+    // Match Japanese address patterns
+    const m = text.match(/((?:北海道|東京都|(?:京都|大阪)府|.{2,3}県).{1,6}[市区町村].{0,20}?(?:\d+[-ー]\d+|丁目|番地|号))/);
+    if (m) return m[1];
+    // Simpler: city + subsequent detail
+    const simple = text.match(/([^　\s]{2,6}[市区町村][^　\s,、。]{2,20})/);
+    return simple ? simple[1] : null;
+  }
+
+  /**
+   * Extract latitude/longitude from HTML (structured data, data attributes, or inline script).
+   */
+  protected extractCoordinates(html: string): { latitude: number | null; longitude: number | null } {
+    // JSON-LD structured data
+    const jsonLd = html.match(/"latitude"\s*:\s*"?([0-9.]+)"?\s*,\s*"longitude"\s*:\s*"?([0-9.]+)"?/);
+    if (jsonLd) return { latitude: parseFloat(jsonLd[1]), longitude: parseFloat(jsonLd[2]) };
+    // data-lat / data-lng attributes
+    const dataAttr = html.match(/data-lat(?:itude)?="([0-9.]+)"[^>]*data-l(?:ng|on(?:gitude)?)="([0-9.]+)"/);
+    if (dataAttr) return { latitude: parseFloat(dataAttr[1]), longitude: parseFloat(dataAttr[2]) };
+    // Google Maps embed or link
+    const gmap = html.match(/[?&](?:q|ll|center)=([0-9.]+),([0-9.]+)/);
+    if (gmap) return { latitude: parseFloat(gmap[1]), longitude: parseFloat(gmap[2]) };
+    return { latitude: null, longitude: null };
   }
 
   protected extractPrice(text: string): { price: number | null; priceText: string } {

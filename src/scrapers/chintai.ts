@@ -18,6 +18,32 @@ export class ChintaiScraper extends BaseScraper {
     return this.getMockData(ctx.prefecture);
   }
 
+  async scrapeDetail(url: string): Promise<Partial<Property>> {
+    const html = await this.fetchHtml(url);
+    if (!html) return {};
+
+    const result: Partial<Property> = {};
+
+    result.address = this.extractAddress(html);
+    result.age = this.extractAge(html);
+    const { floor, totalFloors } = this.extractFloor(html);
+    if (floor !== null) result.floor = floor;
+    if (totalFloors !== null) result.totalFloors = totalFloors;
+    result.direction = this.extractDirection(html);
+    result.structure = this.extractStructure(html);
+
+    const { latitude, longitude } = this.extractCoordinates(html);
+    if (latitude !== null) result.latitude = latitude;
+    if (longitude !== null) result.longitude = longitude;
+
+    const images = this.extractImages(html, 'https://chintai.net');
+    if (images.length > 0) result.images = images;
+
+    result.floorPlanUrl = this.extractFloorPlanUrl(html);
+
+    return result;
+  }
+
   private parseListings(html: string, prefecture: PrefectureCode): Property[] {
     const properties: Property[] = [];
     const cardRegex = /<div[^>]+class="[^"]*property-cassette[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/section>/g;
@@ -40,17 +66,23 @@ export class ChintaiScraper extends BaseScraper {
         const area = areaMatch ? parseFloat(areaMatch[1]) : null;
         const { station, stationMinutes } = this.extractStation(card);
         const age = this.extractAge(card);
+        const { floor, totalFloors } = this.extractFloor(card);
         const sitePropertyId = `chintai_${btoa(encodeURIComponent(detailUrl)).slice(0, 18)}`;
         const city = card.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+        const address = this.extractAddress(card);
+
+        // Detect rental type: apartment vs detached house
+        const propertyType = /(?:一戸建|戸建|一軒家)/.test(title + card) ? 'chintai_ikkodate' as const : 'chintai_mansion' as const;
 
         const fingerprint = this.computeFingerprint({ prefecture, city, price: rent, area, rooms: roomsMatch?.[1] ?? null });
 
         properties.push(this.buildBaseProperty({
           sitePropertyId,
           title,
-          propertyType: 'chintai_mansion',
+          propertyType,
           prefecture,
           city,
+          address,
           detailUrl,
           price: rent,
           priceText: rent ? `家賃${rent}万円/月` : '要問合せ',
@@ -59,6 +91,8 @@ export class ChintaiScraper extends BaseScraper {
           station,
           stationMinutes,
           age,
+          floor,
+          totalFloors,
           thumbnailUrl: this.extractThumbnail(card),
           images: this.extractImages(card),
           managementFee: this.extractMonthlyFee(card, '管理費'),

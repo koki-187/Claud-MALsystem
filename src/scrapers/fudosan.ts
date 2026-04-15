@@ -18,6 +18,38 @@ export class FudosanScraper extends BaseScraper {
     return this.getMockData(ctx.prefecture);
   }
 
+  async scrapeDetail(url: string): Promise<Partial<Property>> {
+    const html = await this.fetchHtml(url);
+    if (!html) return {};
+
+    const result: Partial<Property> = {};
+
+    result.address = this.extractAddress(html);
+    result.age = this.extractAge(html);
+    const { floor, totalFloors } = this.extractFloor(html);
+    if (floor !== null) result.floor = floor;
+    if (totalFloors !== null) result.totalFloors = totalFloors;
+    result.direction = this.extractDirection(html);
+    result.structure = this.extractStructure(html);
+
+    const buildMatch = html.match(/(?:専有面積|建物面積)[^0-9]*(\d+(?:\.\d+)?)\s*m/);
+    if (buildMatch) result.buildingArea = parseFloat(buildMatch[1]);
+    const landMatch = html.match(/(?:土地面積|敷地面積)[^0-9]*(\d+(?:\.\d+)?)\s*m/);
+    if (landMatch) result.landArea = parseFloat(landMatch[1]);
+
+    const { latitude, longitude } = this.extractCoordinates(html);
+    if (latitude !== null) result.latitude = latitude;
+    if (longitude !== null) result.longitude = longitude;
+
+    const images = this.extractImages(html, 'https://fudosan.jp');
+    if (images.length > 0) result.images = images;
+
+    result.floorPlanUrl = this.extractFloorPlanUrl(html);
+    result.exteriorUrl = this.extractExteriorUrl(html);
+
+    return result;
+  }
+
   private parseListings(html: string, prefecture: PrefectureCode): Property[] {
     const properties: Property[] = [];
     const cardRegex = /<div[^>]+class="[^"]*bukken-item[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/li>/g;
@@ -40,17 +72,23 @@ export class FudosanScraper extends BaseScraper {
         const area = areaMatch ? parseFloat(areaMatch[1]) : null;
         const { station, stationMinutes } = this.extractStation(card);
         const age = this.extractAge(card);
+        const { floor, totalFloors } = this.extractFloor(card);
         const sitePropertyId = `fudosan_${btoa(encodeURIComponent(detailUrl)).slice(0, 18)}`;
         const city = card.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+        const address = this.extractAddress(card);
+
+        // Dynamic property type detection
+        const propertyType = this.detectPropertyType(title + ' ' + card);
 
         const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms: roomsMatch?.[1] ?? null });
 
         properties.push(this.buildBaseProperty({
           sitePropertyId,
           title,
-          propertyType: 'mansion',
+          propertyType,
           prefecture,
           city,
+          address,
           detailUrl,
           price,
           priceText,
@@ -59,6 +97,8 @@ export class FudosanScraper extends BaseScraper {
           station,
           stationMinutes,
           age,
+          floor,
+          totalFloors,
           thumbnailUrl: this.extractThumbnail(card),
           images: this.extractImages(card),
           managementFee: this.extractMonthlyFee(card, '管理費'),

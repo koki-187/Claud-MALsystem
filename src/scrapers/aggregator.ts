@@ -12,6 +12,9 @@ import { KenbiyaScraper } from './kenbiya';
 import { RakumachiScraper } from './rakumachi';
 
 const SCRAPER_TIMEOUT_MS = 20000;
+const DETAIL_TIMEOUT_MS = 10000;
+/** Max detail pages to fetch per site per scheduled scrape (CPU budget) */
+const MAX_DETAIL_FETCHES_PER_SITE = 5;
 
 const ALL_SITE_IDS: SiteId[] = [
   'suumo', 'homes', 'athome', 'fudosan', 'chintai',
@@ -20,16 +23,26 @@ const ALL_SITE_IDS: SiteId[] = [
 
 /**
  * Rotate prefectures by day-of-week to stay within Cloudflare CPU limits.
- * 2–3 prefectures × 9 sites per cron invocation.
+ * Full 47-prefecture coverage over a 14-day cycle (2 weeks).
+ * Major metro areas appear in Week 1 (Mon-Sun), remaining in Week 2.
  */
 const PREFECTURE_ROTATION: PrefectureCode[][] = [
-  ['13', '27'],       // 0 Mon  東京・大阪
-  ['14', '23'],       // 1 Tue  神奈川・愛知
-  ['11', '12'],       // 2 Wed  埼玉・千葉
-  ['01', '40'],       // 3 Thu  北海道・福岡
-  ['26', '28'],       // 4 Fri  京都・兵庫
-  ['22', '08'],       // 5 Sat  静岡・茨城
-  ['07', '04', '41'], // 6 Sun  福島・宮城・佐賀
+  // Week 1: Major metro areas (high property density)
+  ['13', '27'],             // Mon  東京・大阪
+  ['14', '23'],             // Tue  神奈川・愛知
+  ['11', '12'],             // Wed  埼玉・千葉
+  ['01', '40'],             // Thu  北海道・福岡
+  ['26', '28'],             // Fri  京都・兵庫
+  ['22', '34', '04'],       // Sat  静岡・広島・宮城
+  ['08', '15', '20'],       // Sun  茨城・新潟・長野
+  // Week 2: Remaining prefectures
+  ['02', '03', '05', '06'], // Mon  青森・岩手・秋田・山形
+  ['07', '09', '10'],       // Tue  福島・栃木・群馬
+  ['16', '17', '18', '19'], // Wed  富山・石川・福井・山梨
+  ['21', '24', '25'],       // Thu  岐阜・三重・滋賀
+  ['29', '30', '31', '32', '33'], // Fri  奈良・和歌山・鳥取・島根・岡山
+  ['35', '36', '37', '38', '39'], // Sat  山口・徳島・香川・愛媛・高知
+  ['41', '42', '43', '44', '45', '46', '47'], // Sun  佐賀〜沖縄
 ];
 
 function createScrapers(): Record<SiteId, BaseScraper> {
@@ -53,6 +66,72 @@ function createScrapers(): Record<SiteId, BaseScraper> {
 function isAllMockData(properties: Property[]): boolean {
   if (properties.length === 0) return true;
   return properties.every(p => p.sitePropertyId.includes('mock_'));
+}
+
+/**
+ * Enrich properties with detail page data.
+ * Fetches detail pages for properties missing critical fields.
+ * Respects CPU budget by limiting concurrent fetches.
+ */
+async function enrichWithDetails(
+  scraper: BaseScraper,
+  properties: Property[],
+  maxFetches: number
+): Promise<Property[]> {
+  // Prioritize properties missing the most fields
+  const needsEnrichment = properties
+    .map((p, idx) => {
+      let score = 0;
+      if (p.age === null) score += 2;
+      if (p.floor === null && p.propertyType === 'mansion') score += 1;
+      if (p.latitude === null) score += 2;
+      if (p.address === null) score += 1;
+      if (p.images.length <= 1) score += 1;
+      if (p.buildingArea === null && p.landArea === null) score += 1;
+      return { idx, score, url: p.detailUrl };
+    })
+    .filter(e => e.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, maxFetches);
+
+  const enriched = [...properties];
+
+  for (const item of needsEnrichment) {
+    try {
+      const detail = await Promise.race([
+        scraper.scrapeDetail(item.url),
+        new Promise<Partial<Property>>((_, r) => setTimeout(() => r(new Error('detail timeout')), DETAIL_TIMEOUT_MS)),
+      ]);
+
+      // Merge detail data into property (only fill nulls, don't overwrite existing data)
+      const prop = enriched[item.idx];
+      if (detail.address && !prop.address) prop.address = detail.address;
+      if (detail.age !== undefined && prop.age === null) prop.age = detail.age;
+      if (detail.floor !== undefined && prop.floor === null) prop.floor = detail.floor ?? null;
+      if (detail.totalFloors !== undefined && prop.totalFloors === null) prop.totalFloors = detail.totalFloors ?? null;
+      if (detail.direction && !prop.direction) prop.direction = detail.direction;
+      if (detail.structure && !prop.structure) prop.structure = detail.structure;
+      if (detail.buildingArea && !prop.buildingArea) prop.buildingArea = detail.buildingArea;
+      if (detail.landArea && !prop.landArea) prop.landArea = detail.landArea;
+      if (detail.latitude && !prop.latitude) prop.latitude = detail.latitude;
+      if (detail.longitude && !prop.longitude) prop.longitude = detail.longitude;
+      if (detail.managementFee && !prop.managementFee) prop.managementFee = detail.managementFee;
+      if (detail.repairFund && !prop.repairFund) prop.repairFund = detail.repairFund;
+      if (detail.images && detail.images.length > prop.images.length) prop.images = detail.images;
+      if (detail.floorPlanUrl && !prop.floorPlanUrl) prop.floorPlanUrl = detail.floorPlanUrl;
+      if (detail.exteriorUrl && !prop.exteriorUrl) prop.exteriorUrl = detail.exteriorUrl;
+      if (detail.description && !prop.description) prop.description = detail.description;
+      if (detail.features && detail.features.length > prop.features.length) prop.features = detail.features;
+      if (detail.rooms && !prop.rooms) prop.rooms = detail.rooms;
+      if (detail.station && !prop.station) prop.station = detail.station;
+      if (detail.stationMinutes !== undefined && prop.stationMinutes === null) prop.stationMinutes = detail.stationMinutes ?? null;
+      if (detail.yieldRate !== undefined && prop.yieldRate === null) prop.yieldRate = detail.yieldRate ?? null;
+    } catch {
+      // Detail fetch failed — keep list-level data
+    }
+  }
+
+  return enriched;
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -138,7 +217,9 @@ export async function aggregateSearch(
 
 /**
  * Run scheduled full scrape.
- * - Rotates prefectures by day-of-week (override via env.SCRAPE_PREFECTURES)
+ * - Rotates prefectures on a 14-day cycle covering all 47 prefectures
+ * - Override via env.SCRAPE_PREFECTURES
+ * - Tier 1: List scrape → Tier 2: Detail enrichment for top properties
  * - Skips DB writes when mock data is returned (isAllMockData guard)
  * - Marks previously-active properties as sold if absent from latest real scrape
  * - Records price history (one entry per property per day)
@@ -149,6 +230,7 @@ export async function runScheduledScrape(env: Bindings): Promise<{
   newCount: number;
   updatedCount: number;
   soldCount: number;
+  detailEnriched: number;
   errors: string[];
 }> {
   // Determine which prefectures to scrape today
@@ -156,9 +238,11 @@ export async function runScheduledScrape(env: Bindings): Promise<{
   if (env.SCRAPE_PREFECTURES) {
     targetPrefectures = env.SCRAPE_PREFECTURES.split(',').map(s => s.trim()) as PrefectureCode[];
   } else {
-    const dow = new Date().getDay(); // 0=Sun … 6=Sat
-    // Rotation index: getDay() returns 0 for Sunday; map Sun→6, Mon→0, …
-    const idx = dow === 0 ? 6 : dow - 1;
+    // 14-day rotation: use day-of-year mod 14
+    const now = new Date();
+    const startOfYear = new Date(now.getFullYear(), 0, 0);
+    const dayOfYear = Math.floor((now.getTime() - startOfYear.getTime()) / (1000 * 60 * 60 * 24));
+    const idx = dayOfYear % PREFECTURE_ROTATION.length;
     targetPrefectures = PREFECTURE_ROTATION[idx] ?? PREFECTURE_ROTATION[0];
   }
 
@@ -166,7 +250,7 @@ export async function runScheduledScrape(env: Bindings): Promise<{
   const maxResults = parseInt(env.MAX_RESULTS_PER_SITE ?? '15');
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
-  let total = 0, newCount = 0, updatedCount = 0, soldCount = 0;
+  let total = 0, newCount = 0, updatedCount = 0, soldCount = 0, detailEnriched = 0;
   const errors: string[] = [];
 
   for (const prefecture of targetPrefectures) {
@@ -182,7 +266,8 @@ export async function runScheduledScrape(env: Bindings): Promise<{
            VALUES (?, ?, ?, 'running', datetime('now'))`
         ).bind(jobId, siteId, prefecture).run();
 
-        const properties = await Promise.race([
+        // ── Tier 1: List scrape ──────────────────────────────────────────────
+        let properties = await Promise.race([
           scraper.scrapeListings({ prefecture, maxResults }),
           new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), SCRAPER_TIMEOUT_MS)),
         ]);
@@ -193,6 +278,20 @@ export async function runScheduledScrape(env: Bindings): Promise<{
             `UPDATE scrape_jobs SET status = 'skipped_mock', completed_at = datetime('now') WHERE id = ?`
           ).bind(jobId).run();
           continue;
+        }
+
+        // ── Tier 2: Detail enrichment for new/incomplete properties ──────────
+        const enrichedCount = properties.filter(p =>
+          p.age === null || p.latitude === null || (p.address === null && p.propertyType !== 'tochi')
+        ).length;
+
+        if (enrichedCount > 0) {
+          try {
+            properties = await enrichWithDetails(scraper, properties, MAX_DETAIL_FETCHES_PER_SITE);
+            detailEnriched += Math.min(enrichedCount, MAX_DETAIL_FETCHES_PER_SITE);
+          } catch {
+            // Detail enrichment failure is non-fatal — use list-level data
+          }
         }
 
         let jobNew = 0, jobUpdated = 0, jobSold = 0;
@@ -231,9 +330,20 @@ export async function runScheduledScrape(env: Bindings): Promise<{
               price         = excluded.price,
               price_text    = excluded.price_text,
               area          = COALESCE(excluded.area, area),
+              building_area = COALESCE(excluded.building_area, building_area),
+              land_area     = COALESCE(excluded.land_area, land_area),
+              rooms         = COALESCE(excluded.rooms, rooms),
+              age           = COALESCE(excluded.age, age),
+              floor         = COALESCE(excluded.floor, floor),
+              total_floors  = COALESCE(excluded.total_floors, total_floors),
+              station       = COALESCE(excluded.station, station),
+              station_minutes = COALESCE(excluded.station_minutes, station_minutes),
               thumbnail_url = COALESCE(excluded.thumbnail_url, thumbnail_url),
               description   = COALESCE(excluded.description, description),
               yield_rate    = COALESCE(excluded.yield_rate, yield_rate),
+              latitude      = COALESCE(excluded.latitude, latitude),
+              longitude     = COALESCE(excluded.longitude, longitude),
+              address       = COALESCE(excluded.address, address),
               fingerprint   = excluded.fingerprint,
               last_seen_at  = datetime('now'),
               status        = CASE WHEN status = 'sold' THEN 'sold' ELSE 'active' END,
@@ -298,7 +408,7 @@ export async function runScheduledScrape(env: Bindings): Promise<{
     }
   }
 
-  return { total, newCount, updatedCount, soldCount, errors };
+  return { total, newCount, updatedCount, soldCount, detailEnriched, errors };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

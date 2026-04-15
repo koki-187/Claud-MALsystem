@@ -95,3 +95,26 @@
 - **変更内容**: セッション間同期プロトコル追加 — CLAUDE.mdにセッション間同期手順・BUILD_LOG.md運用ルールを追記。BUILD_LOG.md作成（全構築履歴を記録）
 - **デプロイ**: 不要
 - **次のタスク**: masterブランチへマージ（Desktop側で実施）→ wrangler deploy
+
+## 2026-04-15 20:30 (Web/iOS)
+- **環境**: Web (Claude Code Remote)
+- **ブランチ**: claude/remote-control-browser-ios-W3jrT
+- **変更内容**: v7.0 スクレイパー全面リファクタリング — 本番品質データ収集戦略を実装
+  - **BaseScraper強化**: `detectPropertyType()` 動的物件種別判定、`extractFloor()` 階数抽出、`extractAddress()` 住所抽出、`extractCoordinates()` 緯度経度抽出、`assessQuality()` データ品質スコア算出、User-Agent更新
+  - **全9サイト共通改善**: 
+    - `scrapeDetail()` 詳細ページスクレイピング実装（全9サイト）
+    - `detectPropertyType()` でハードコード `'mansion'` → 動的判定（マンション/一戸建て/土地/賃貸/投資/事務所）
+    - `extractFloor()` / `extractAge()` をリスティング解析に追加
+    - `extractAddress()` による住所抽出追加
+  - **投資物件スクレイパー（健美家・楽待）強化**: 駅・築年数・部屋数・階数の抽出を追加
+  - **Smaityスクレイパー**: `propertyType` を `'mansion'` → 動的判定に修正、利回り抽出追加
+  - **CHINTAIスクレイパー**: 賃貸マンション/賃貸一戸建ての動的判定追加
+  - **REINSスクレイパー**: 構文エラー修正、動的物件種別判定・土地面積抽出追加
+  - **アグリゲーター v2**: 
+    - 14日サイクル都道府県ローテーション（全47都道府県完全カバー）
+    - 階層スクレイピング（Tier 1: 一覧 → Tier 2: 詳細ページ自動エンリッチメント）
+    - UPSERT改善（building_area, land_area, rooms, age, floor等のCOALESCEマージ）
+    - `detailEnriched` カウント追加
+  - **CLAUDE.md**: 会話言語ルール追加（全セッション日本語）
+- **デプロイ**: 未（Desktop側でmasterマージ後にデプロイ）
+- **次のタスク**: Desktop側でmasterマージ → wrangler deploy → 実サイトでのスクレイピング動作検証

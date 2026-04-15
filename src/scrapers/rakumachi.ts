@@ -20,6 +20,45 @@ export class RakumachiScraper extends BaseScraper {
     return this.getMockData(prefecture);
   }
 
+  async scrapeDetail(url: string): Promise<Partial<Property>> {
+    const html = await this.fetchHtml(url);
+    if (!html) return {};
+
+    const result: Partial<Property> = {};
+
+    result.address = this.extractAddress(html);
+    result.age = this.extractAge(html);
+    const { floor, totalFloors } = this.extractFloor(html);
+    if (floor !== null) result.floor = floor;
+    if (totalFloors !== null) result.totalFloors = totalFloors;
+    result.structure = this.extractStructure(html);
+
+    const buildMatch = html.match(/(?:建物面積|延床面積)[^0-9]*(\d+(?:\.\d+)?)\s*m/);
+    if (buildMatch) result.buildingArea = parseFloat(buildMatch[1]);
+    const landMatch = html.match(/(?:土地面積|敷地面積)[^0-9]*(\d+(?:\.\d+)?)\s*m/);
+    if (landMatch) result.landArea = parseFloat(landMatch[1]);
+
+    // Station from detail
+    const { station, stationMinutes } = this.extractStation(html);
+    if (station) result.station = station;
+    if (stationMinutes !== null) result.stationMinutes = stationMinutes;
+
+    // Rooms from detail
+    const roomsMatch = html.match(/(?:間取り|部屋数)[^0-9]*([1-9][LDKSR]+|\d+室)/);
+    if (roomsMatch) result.rooms = roomsMatch[1];
+
+    const { latitude, longitude } = this.extractCoordinates(html);
+    if (latitude !== null) result.latitude = latitude;
+    if (longitude !== null) result.longitude = longitude;
+
+    const images = this.extractImages(html, 'https://www.rakumachi.jp');
+    if (images.length > 0) result.images = images;
+
+    result.floorPlanUrl = this.extractFloorPlanUrl(html);
+
+    return result;
+  }
+
   private parseRakumachi(html: string, prefecture: PrefectureCode, maxResults: number): Property[] {
     const properties: Property[] = [];
     const itemPattern = /<li[^>]+class="[^"]*property[^"]*"[^>]*>([\s\S]*?)<\/li>/gi;
@@ -49,14 +88,22 @@ export class RakumachiScraper extends BaseScraper {
         const area  = areaM  ? parseFloat(areaM[1]) : null;
         const city = chunk.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
         const yieldRate = yieldM ? parseFloat(yieldM[1]) : null;
+        const address = this.extractAddress(chunk);
 
-        // 想定年収を description に追記
+        // Extract station, age, rooms, structure from listing card
+        const { station, stationMinutes } = this.extractStation(chunk);
+        const age = this.extractAge(chunk);
+        const roomsMatch = chunk.match(/([1-9][LDKSR]+|\d+室)/);
+        const rooms = roomsMatch ? roomsMatch[1] : null;
+        const { floor, totalFloors } = this.extractFloor(chunk);
+
+        // Annual income in description
         let descriptionExtra = '';
         if (annualM) {
-          descriptionExtra = ` 想定年収：${annualM[1]}万円/年`;
+          descriptionExtra = `想定年収：${annualM[1]}万円/年`;
         }
 
-        const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms: null });
+        const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms });
 
         properties.push(this.buildBaseProperty({
           sitePropertyId,
@@ -64,10 +111,17 @@ export class RakumachiScraper extends BaseScraper {
           propertyType: 'investment',
           prefecture,
           city,
+          address,
           detailUrl,
           price,
           priceText: priceM ? `${priceM[1]}万円` : '価格要相談',
           area,
+          rooms,
+          age,
+          floor,
+          totalFloors,
+          station,
+          stationMinutes,
           yieldRate,
           description: descriptionExtra || null,
           thumbnailUrl: this.extractThumbnail(chunk),

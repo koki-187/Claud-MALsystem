@@ -19,6 +19,68 @@ export class SuumoScraper extends BaseScraper {
     return this.getMockData(ctx.prefecture);
   }
 
+  async scrapeDetail(url: string): Promise<Partial<Property>> {
+    const html = await this.fetchHtml(url);
+    if (!html) return {};
+
+    const result: Partial<Property> = {};
+
+    // Full address
+    result.address = this.extractAddress(html);
+
+    // Age
+    result.age = this.extractAge(html);
+
+    // Floor info
+    const { floor, totalFloors } = this.extractFloor(html);
+    if (floor !== null) result.floor = floor;
+    if (totalFloors !== null) result.totalFloors = totalFloors;
+
+    // Direction, structure
+    result.direction = this.extractDirection(html);
+    result.structure = this.extractStructure(html);
+
+    // Management fee / repair fund
+    const mgmt = html.match(/管理費[^0-9]*([0-9,]+)\s*円/);
+    if (mgmt) result.managementFee = parseInt(mgmt[1].replace(/,/g, ''));
+    const repair = html.match(/修繕積立金[^0-9]*([0-9,]+)\s*円/);
+    if (repair) result.repairFund = parseInt(repair[1].replace(/,/g, ''));
+
+    // Building/land area
+    const buildMatch = html.match(/(?:専有面積|建物面積)[^0-9]*(\d+(?:\.\d+)?)\s*m/);
+    if (buildMatch) result.buildingArea = parseFloat(buildMatch[1]);
+    const landMatch = html.match(/(?:土地面積|敷地面積)[^0-9]*(\d+(?:\.\d+)?)\s*m/);
+    if (landMatch) result.landArea = parseFloat(landMatch[1]);
+
+    // Coordinates
+    const { latitude, longitude } = this.extractCoordinates(html);
+    if (latitude !== null) result.latitude = latitude;
+    if (longitude !== null) result.longitude = longitude;
+
+    // Images
+    const images = this.extractImages(html, 'https://suumo.jp');
+    if (images.length > 0) result.images = images;
+
+    // Floor plan / exterior
+    result.floorPlanUrl = this.extractFloorPlanUrl(html);
+    result.exteriorUrl = this.extractExteriorUrl(html);
+
+    // Description
+    const descMatch = html.match(/<p[^>]*class="[^"]*(?:detail|comment|description)[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
+    if (descMatch) result.description = descMatch[1].replace(/<[^>]+>/g, '').trim().slice(0, 500);
+
+    // Features
+    const featureMatches = html.matchAll(/<li[^>]*class="[^"]*(?:point|tag|feature)[^"]*"[^>]*>([^<]+)<\/li>/gi);
+    const features: string[] = [];
+    for (const fm of featureMatches) {
+      const f = fm[1].trim();
+      if (f && features.length < 15) features.push(f);
+    }
+    if (features.length > 0) result.features = features;
+
+    return result;
+  }
+
   private parseListings(html: string, prefecture: PrefectureCode): Property[] {
     const properties: Property[] = [];
     const cardRegex = /<div[^>]+class="[^"]*cassette_inner[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/g;
@@ -41,10 +103,16 @@ export class SuumoScraper extends BaseScraper {
         const { price, priceText } = this.extractPrice(card.match(/(\d[,\d]*万円)/)?.[1] ?? '');
         const area = this.extractArea(areaMatch?.[0] ?? '');
         const { station, stationMinutes } = this.extractStation(card);
+        const age = this.extractAge(card);
+        const { floor, totalFloors } = this.extractFloor(card);
         const sitePropertyId = btoa(encodeURIComponent(detailUrl)).slice(0, 20);
         const city = card.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+        const address = this.extractAddress(card);
 
-        // 管理費・修繕積立金 (SUUMO特有パターン)
+        // Dynamic property type detection
+        const propertyType = this.detectPropertyType(title + ' ' + card);
+
+        // Management fee / repair fund (SUUMO-specific patterns)
         const managementFeeMatch = card.match(/管理費：(\d[,\d]*)円/);
         const repairFundMatch = card.match(/修繕積立金：(\d[,\d]*)円/);
         const managementFee = managementFeeMatch ? parseInt(managementFeeMatch[1].replace(/,/g, '')) : null;
@@ -55,14 +123,18 @@ export class SuumoScraper extends BaseScraper {
         properties.push(this.buildBaseProperty({
           sitePropertyId,
           title,
-          propertyType: 'mansion',
+          propertyType,
           prefecture,
           city,
+          address,
           detailUrl,
           price,
           priceText,
           area,
           rooms: roomsMatch?.[1] ?? null,
+          age,
+          floor,
+          totalFloors,
           station,
           stationMinutes,
           thumbnailUrl: imgMatch?.[1] ?? null,
