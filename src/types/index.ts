@@ -1,4 +1,4 @@
-// MAL System - Type Definitions v6.2
+// MAL System - Type Definitions v7.0
 
 export type PrefectureCode =
   | '01' | '02' | '03' | '04' | '05' | '06' | '07' | '08' | '09' | '10'
@@ -120,9 +120,14 @@ export interface SearchParams {
   stationMinutes?: number;
   yieldMin?: number;                // 利回り下限
   managementFeeMax?: number;        // 管理費上限
+  floorMin?: number;                // 階数下限
+  landAreaMin?: number;             // 土地面積下限
+  buildingAreaMin?: number;         // 建物面積下限
+  structure?: string;               // 構造フィルター (RC造, 木造 etc.)
+  hasCoordinates?: boolean;         // 座標データあり
   sites?: SiteId[];
   hideDuplicates?: boolean;         // クロスサイト重複を非表示
-  sortBy?: 'price_asc' | 'price_desc' | 'area_asc' | 'area_desc' | 'newest' | 'relevance' | 'yield_desc';
+  sortBy?: 'price_asc' | 'price_desc' | 'area_asc' | 'area_desc' | 'newest' | 'relevance' | 'yield_desc' | 'age_asc' | 'age_desc' | 'floor_desc';
   page?: number;
   limit?: number;
 }

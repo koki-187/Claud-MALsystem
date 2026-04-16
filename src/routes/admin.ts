@@ -90,7 +90,7 @@ admin.get('/export.csv', async (c) => {
     'Content-Disposition': `attachment; filename="mal_properties_${dateStr}.csv"`,
   });
 
-  const HEADER = 'id,site_id,title,property_type,status,prefecture,city,address,price,price_text,area,rooms,age,floor,station,station_minutes,management_fee,repair_fund,direction,structure,yield_rate,thumbnail_url,detail_url,description,fingerprint,latitude,longitude,listed_at,sold_at,last_seen_at,created_at,updated_at';
+  const HEADER = 'id,site_id,title,property_type,status,prefecture,city,address,price,price_text,area,building_area,land_area,rooms,age,floor,total_floors,station,station_minutes,management_fee,repair_fund,direction,structure,yield_rate,thumbnail_url,detail_url,description,fingerprint,latitude,longitude,listed_at,sold_at,last_seen_at,created_at,updated_at';
 
   function escapeCsv(val: unknown): string {
     if (val === null || val === undefined) return '';
@@ -105,7 +105,9 @@ admin.get('/export.csv', async (c) => {
     return [
       row.id, row.site_id, row.title, row.property_type, row.status,
       row.prefecture, row.city, row.address, row.price, row.price_text,
-      row.area, row.rooms, row.age, row.floor, row.station, row.station_minutes,
+      row.area, row.building_area, row.land_area,
+      row.rooms, row.age, row.floor, row.total_floors,
+      row.station, row.station_minutes,
       row.management_fee, row.repair_fund, row.direction, row.structure,
       row.yield_rate, row.thumbnail_url, row.detail_url, row.description,
       row.fingerprint, row.latitude, row.longitude,
@@ -356,6 +358,112 @@ admin.delete('/sold-cleanup', async (c) => {
 
   const affected = (result.meta?.changes as number | undefined) ?? 0;
   return c.json({ delistedCount: affected });
+});
+
+// ─── GET /api/admin/quality-report ───────────────────────────────────────────
+admin.get('/quality-report', async (c) => {
+  const db = c.env.MAL_DB;
+
+  // Overall data completeness per field
+  const [
+    totalRow,
+    withPrice, withArea, withRooms, withAge, withFloor, withTotalFloors,
+    withStation, withStationMin, withAddress, withCoords,
+    withBuildingArea, withLandArea, withStructure, withDirection,
+    withYield, withThumbnail, withDescription, withFingerprint,
+  ] = await Promise.all([
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active'`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND price IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND area IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND rooms IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND age IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND floor IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND total_floors IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND station IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND station_minutes IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND address IS NOT NULL AND address != ''`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND latitude IS NOT NULL AND longitude IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND building_area IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND land_area IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND structure IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND direction IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND yield_rate IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND thumbnail_url IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND description IS NOT NULL AND description != ''`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active' AND fingerprint IS NOT NULL`)),
+  ]);
+
+  const total = totalRow?.cnt ?? 0;
+  const pct = (v: number) => total > 0 ? Math.round((v / total) * 1000) / 10 : 0;
+
+  // Per-site quality breakdown
+  const siteQuality = await safeAll<{
+    site_id: SiteId; cnt: number;
+    has_price: number; has_area: number; has_rooms: number;
+    has_age: number; has_address: number; has_coords: number;
+    has_station: number; has_structure: number; has_floor: number;
+  }>(db.prepare(`
+    SELECT site_id,
+      COUNT(*) as cnt,
+      COUNT(CASE WHEN price IS NOT NULL THEN 1 END) as has_price,
+      COUNT(CASE WHEN area IS NOT NULL THEN 1 END) as has_area,
+      COUNT(CASE WHEN rooms IS NOT NULL THEN 1 END) as has_rooms,
+      COUNT(CASE WHEN age IS NOT NULL THEN 1 END) as has_age,
+      COUNT(CASE WHEN address IS NOT NULL AND address != '' THEN 1 END) as has_address,
+      COUNT(CASE WHEN latitude IS NOT NULL AND longitude IS NOT NULL THEN 1 END) as has_coords,
+      COUNT(CASE WHEN station IS NOT NULL THEN 1 END) as has_station,
+      COUNT(CASE WHEN structure IS NOT NULL THEN 1 END) as has_structure,
+      COUNT(CASE WHEN floor IS NOT NULL THEN 1 END) as has_floor
+    FROM properties WHERE status='active'
+    GROUP BY site_id
+  `));
+
+  const siteBreakdown = (siteQuality.results ?? []).map(r => {
+    const fields = r.has_price + r.has_area + r.has_rooms + r.has_age + r.has_address
+      + r.has_coords + r.has_station + r.has_structure + r.has_floor;
+    const maxFields = r.cnt * 9;
+    return {
+      siteId: r.site_id,
+      total: r.cnt,
+      avgScore: maxFields > 0 ? Math.round((fields / maxFields) * 100) : 0,
+      fields: {
+        price: r.has_price,
+        area: r.has_area,
+        rooms: r.has_rooms,
+        age: r.has_age,
+        address: r.has_address,
+        coords: r.has_coords,
+        station: r.has_station,
+        structure: r.has_structure,
+        floor: r.has_floor,
+      },
+    };
+  });
+
+  return c.json({
+    totalActive: total,
+    fieldCompleteness: {
+      price:        { count: withPrice?.cnt ?? 0,        pct: pct(withPrice?.cnt ?? 0) },
+      area:         { count: withArea?.cnt ?? 0,          pct: pct(withArea?.cnt ?? 0) },
+      rooms:        { count: withRooms?.cnt ?? 0,         pct: pct(withRooms?.cnt ?? 0) },
+      age:          { count: withAge?.cnt ?? 0,            pct: pct(withAge?.cnt ?? 0) },
+      floor:        { count: withFloor?.cnt ?? 0,          pct: pct(withFloor?.cnt ?? 0) },
+      totalFloors:  { count: withTotalFloors?.cnt ?? 0,    pct: pct(withTotalFloors?.cnt ?? 0) },
+      station:      { count: withStation?.cnt ?? 0,        pct: pct(withStation?.cnt ?? 0) },
+      stationMinutes: { count: withStationMin?.cnt ?? 0,   pct: pct(withStationMin?.cnt ?? 0) },
+      address:      { count: withAddress?.cnt ?? 0,        pct: pct(withAddress?.cnt ?? 0) },
+      coordinates:  { count: withCoords?.cnt ?? 0,         pct: pct(withCoords?.cnt ?? 0) },
+      buildingArea: { count: withBuildingArea?.cnt ?? 0,   pct: pct(withBuildingArea?.cnt ?? 0) },
+      landArea:     { count: withLandArea?.cnt ?? 0,       pct: pct(withLandArea?.cnt ?? 0) },
+      structure:    { count: withStructure?.cnt ?? 0,      pct: pct(withStructure?.cnt ?? 0) },
+      direction:    { count: withDirection?.cnt ?? 0,      pct: pct(withDirection?.cnt ?? 0) },
+      yieldRate:    { count: withYield?.cnt ?? 0,          pct: pct(withYield?.cnt ?? 0) },
+      thumbnail:    { count: withThumbnail?.cnt ?? 0,      pct: pct(withThumbnail?.cnt ?? 0) },
+      description:  { count: withDescription?.cnt ?? 0,    pct: pct(withDescription?.cnt ?? 0) },
+      fingerprint:  { count: withFingerprint?.cnt ?? 0,    pct: pct(withFingerprint?.cnt ?? 0) },
+    },
+    siteBreakdown,
+  });
 });
 
 export { admin };

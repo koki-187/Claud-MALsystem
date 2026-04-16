@@ -48,6 +48,11 @@ app.get('/api/search', async (c) => {
     ageMax: q.age_max ? parseInt(q.age_max) : undefined,
     stationMinutes: q.station_min ? parseInt(q.station_min) : undefined,
     yieldMin: q.yield_min ? parseFloat(q.yield_min) : undefined,
+    floorMin: q.floor_min ? parseInt(q.floor_min) : undefined,
+    landAreaMin: q.land_area_min ? parseFloat(q.land_area_min) : undefined,
+    buildingAreaMin: q.building_area_min ? parseFloat(q.building_area_min) : undefined,
+    structure: q.structure || undefined,
+    hasCoordinates: q.has_coords === '1' ? true : undefined,
     sites: q.sites ? (q.sites.split(',') as any) : undefined,
     sortBy: q.sort as any,
     page: q.page ? parseInt(q.page) : 1,
@@ -107,7 +112,7 @@ app.get('/api/stats', async (c) => {
 
 app.get('/api/health', (c) => c.json({
   status: 'ok',
-  version: c.env.APP_VERSION ?? '6.0.0',
+  version: c.env.APP_VERSION ?? '7.0.0',
   timestamp: new Date().toISOString(),
   sites: Object.keys(SITES).length,
 }));
@@ -936,6 +941,39 @@ img { max-width: 100%; }
       </div>
     </div>
 
+    <!-- Row 4: structure / floor / land area -->
+    <div class="search-grid3">
+      <div>
+        <div class="field-label">構造</div>
+        <select id="structure" class="field-input">
+          <option value="">すべて</option>
+          <option value="RC">RC造（鉄筋コンクリート）</option>
+          <option value="SRC">SRC造</option>
+          <option value="鉄骨">鉄骨造</option>
+          <option value="木造">木造</option>
+          <option value="軽量鉄骨">軽量鉄骨</option>
+        </select>
+      </div>
+      <div>
+        <div class="field-label">階数下限</div>
+        <select id="floorMin" class="field-input">
+          <option value="">制限なし</option>
+          <option value="2">2階以上</option>
+          <option value="3">3階以上</option>
+          <option value="5">5階以上</option>
+          <option value="10">10階以上</option>
+          <option value="20">20階以上（タワー）</option>
+        </select>
+      </div>
+      <div>
+        <div class="field-label">土地面積</div>
+        <div class="range-row">
+          <input type="number" id="landAreaMin" placeholder="下限m²" class="field-input" min="0">
+          <span class="range-sep">m²以上</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Sites -->
     <div class="sites-row">
       <div class="sites-label">
@@ -963,6 +1001,9 @@ img { max-width: 100%; }
           <option value="area_desc">面積広い順</option>
           <option value="area_asc">面積狭い順</option>
           <option value="yield_desc">利回り高い順</option>
+          <option value="age_asc">築浅い順</option>
+          <option value="age_desc">築古い順</option>
+          <option value="floor_desc">高層階順</option>
           <option value="relevance">関連度順</option>
         </select>
       </div>
@@ -1187,6 +1228,9 @@ async function doSearch(page) {
   var rooms = document.getElementById('rooms').value;
   var stationMin = document.getElementById('stationMin').value;
   var ageMax = document.getElementById('ageMax').value;
+  var structure = document.getElementById('structure').value;
+  var floorMin = document.getElementById('floorMin').value;
+  var landAreaMin = document.getElementById('landAreaMin').value;
   var sortBy = document.getElementById('sortBy').value;
   var sites = [].slice.call(document.querySelectorAll('.site-cb:checked')).map(function(cb) { return cb.value; });
   var hideDuplicates = document.getElementById('hideDuplicates') && (document.getElementById('hideDuplicates') as HTMLInputElement).checked;
@@ -1203,13 +1247,16 @@ async function doSearch(page) {
   if (rooms) q.set('rooms', rooms);
   if (stationMin) q.set('station_min', stationMin);
   if (ageMax) q.set('age_max', ageMax);
+  if (structure) q.set('structure', structure);
+  if (floorMin) q.set('floor_min', floorMin);
+  if (landAreaMin) q.set('land_area_min', landAreaMin);
   if (hideDuplicates) q.set('hide_duplicates', '1');
   if (sites.length > 0 && sites.length < 9) q.set('sites', sites.join(','));
   q.set('sort', sortBy);
   q.set('page', String(page));
   q.set('limit', '18');
 
-  renderFilterChips(query, pref, type, priceMin, priceMax, areaMin, areaMax, rooms, stationMin, ageMax, yieldMin, status);
+  renderFilterChips(query, pref, type, priceMin, priceMax, areaMin, areaMax, rooms, stationMin, ageMax, yieldMin, status, structure, floorMin, landAreaMin);
   setLoading(true);
 
   try {
@@ -1393,7 +1440,7 @@ function renderPagination(data) {
 }
 
 // ── Filter Chips ──
-function renderFilterChips(query, pref, type, priceMin, priceMax, areaMin, areaMax, rooms, stationMin, ageMax, yieldMin, status) {
+function renderFilterChips(query, pref, type, priceMin, priceMax, areaMin, areaMax, rooms, stationMin, ageMax, yieldMin, status, structure, floorMin, landAreaMin) {
   var chips = [];
   if (query) chips.push({ label: '検索: ' + query });
   if (pref) chips.push({ label: PREF_DATA[pref] || pref });
@@ -1404,6 +1451,9 @@ function renderFilterChips(query, pref, type, priceMin, priceMax, areaMin, areaM
   if (stationMin) chips.push({ label: '駅徒歩' + stationMin + '分以内' });
   if (ageMax) chips.push({ label: '築' + ageMax + '年以内' });
   if (yieldMin) chips.push({ label: '利回り' + yieldMin + '%以上' });
+  if (structure) chips.push({ label: '構造: ' + structure });
+  if (floorMin) chips.push({ label: floorMin + '階以上' });
+  if (landAreaMin) chips.push({ label: '土地' + landAreaMin + 'm²以上' });
   if (status && status !== 'active') chips.push({ label: status === 'sold' ? '売却済' : '全ステータス' });
   document.getElementById('filterChips').innerHTML = chips.map(function(c) {
     return '<span class="filter-chip">' + escHtml(c.label) + '</span>';

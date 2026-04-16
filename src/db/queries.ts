@@ -64,6 +64,25 @@ export async function searchProperties(
     whereClauses.push('p.yield_rate >= ?');
     bindings.push(params.yieldMin);
   }
+  if (params.floorMin !== undefined) {
+    whereClauses.push('p.floor >= ?');
+    bindings.push(params.floorMin);
+  }
+  if (params.landAreaMin !== undefined) {
+    whereClauses.push('p.land_area >= ?');
+    bindings.push(params.landAreaMin);
+  }
+  if (params.buildingAreaMin !== undefined) {
+    whereClauses.push('p.building_area >= ?');
+    bindings.push(params.buildingAreaMin);
+  }
+  if (params.structure) {
+    whereClauses.push('p.structure LIKE ?');
+    bindings.push(`%${params.structure}%`);
+  }
+  if (params.hasCoordinates) {
+    whereClauses.push('p.latitude IS NOT NULL AND p.longitude IS NOT NULL');
+  }
   if (params.sites && params.sites.length > 0) {
     const placeholders = params.sites.map(() => '?').join(', ');
     whereClauses.push(`p.site_id IN (${placeholders})`);
@@ -91,6 +110,9 @@ export async function searchProperties(
     area_asc:    'p.area ASC NULLS LAST',
     area_desc:   'p.area DESC NULLS LAST',
     yield_desc:  'p.yield_rate DESC NULLS LAST',
+    age_asc:     'p.age ASC NULLS LAST',
+    age_desc:    'p.age DESC NULLS LAST',
+    floor_desc:  'p.floor DESC NULLS LAST',
     newest:      'p.scraped_at DESC',
     relevance:   'p.scraped_at DESC',
   };
@@ -188,18 +210,32 @@ export async function upsertProperty(db: D1Database, prop: Omit<Property, 'id'>)
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))
     ON CONFLICT(site_id, site_property_id) DO UPDATE SET
-      title          = excluded.title,
-      price          = excluded.price,
-      price_text     = excluded.price_text,
-      description    = excluded.description,
-      fingerprint    = excluded.fingerprint,
-      management_fee = excluded.management_fee,
-      repair_fund    = excluded.repair_fund,
-      direction      = excluded.direction,
-      structure      = excluded.structure,
-      floor_plan_url = excluded.floor_plan_url,
-      exterior_url   = excluded.exterior_url,
-      last_seen_at   = excluded.last_seen_at,
+      title          = COALESCE(excluded.title, properties.title),
+      price          = COALESCE(excluded.price, properties.price),
+      price_text     = COALESCE(excluded.price_text, properties.price_text),
+      area           = COALESCE(excluded.area, properties.area),
+      building_area  = COALESCE(excluded.building_area, properties.building_area),
+      land_area      = COALESCE(excluded.land_area, properties.land_area),
+      rooms          = COALESCE(excluded.rooms, properties.rooms),
+      age            = COALESCE(excluded.age, properties.age),
+      floor          = COALESCE(excluded.floor, properties.floor),
+      total_floors   = COALESCE(excluded.total_floors, properties.total_floors),
+      station        = COALESCE(excluded.station, properties.station),
+      station_minutes = COALESCE(excluded.station_minutes, properties.station_minutes),
+      address        = COALESCE(excluded.address, properties.address),
+      latitude       = COALESCE(excluded.latitude, properties.latitude),
+      longitude      = COALESCE(excluded.longitude, properties.longitude),
+      description    = COALESCE(excluded.description, properties.description),
+      fingerprint    = COALESCE(excluded.fingerprint, properties.fingerprint),
+      management_fee = COALESCE(excluded.management_fee, properties.management_fee),
+      repair_fund    = COALESCE(excluded.repair_fund, properties.repair_fund),
+      direction      = COALESCE(excluded.direction, properties.direction),
+      structure      = COALESCE(excluded.structure, properties.structure),
+      yield_rate     = COALESCE(excluded.yield_rate, properties.yield_rate),
+      thumbnail_url  = COALESCE(excluded.thumbnail_url, properties.thumbnail_url),
+      floor_plan_url = COALESCE(excluded.floor_plan_url, properties.floor_plan_url),
+      exterior_url   = COALESCE(excluded.exterior_url, properties.exterior_url),
+      last_seen_at   = COALESCE(excluded.last_seen_at, properties.last_seen_at),
       status         = CASE WHEN properties.status = 'sold' THEN 'sold' ELSE 'active' END,
       updated_at     = datetime('now'),
       scraped_at     = datetime('now')

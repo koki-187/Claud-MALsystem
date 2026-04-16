@@ -140,4 +140,28 @@
     - 3段階評価: 高品質(70+)/標準(40-69)/基本(0-39)
   - **CSS追加**: 品質バッジ(.prop-quality-badge)、追加スペック行(.prop-specs-extra)、地図リンク(.map-link)、品質メーター(.quality-meter/.quality-bar)
 - **デプロイ**: 未（Desktop側でmasterマージ後にデプロイ）
-- **次のタスク**: Desktop側でmasterマージ → wrangler deploy → 実サイトでのUI動作検証
+- **次のタスク**: Admin API拡張・DBクエリ最適化
+
+## 2026-04-16 10:00 (Web/iOS)
+- **環境**: Web (Claude Code Remote)
+- **ブランチ**: claude/remote-control-browser-ios-W3jrT
+- **変更内容**: Admin API拡張 + DBクエリ最適化 — v7.0新フィールドをバックエンド全体に反映
+  - **Admin API — データ品質レポート (`/api/admin/quality-report`)**:
+    - 18項目のフィールド充填率レポート（price, area, rooms, age, floor, totalFloors, station, stationMinutes, address, coordinates, buildingArea, landArea, structure, direction, yieldRate, thumbnail, description, fingerprint）
+    - サイト別品質スコア（9フィールドの充填率から算出）
+    - 全データをactive物件ベースで集計
+  - **DBクエリ最適化 (queries.ts)**:
+    - 検索フィルター追加: floorMin, landAreaMin, buildingAreaMin, structure（LIKE検索）, hasCoordinates
+    - ソートオプション追加: age_asc（築浅い順）, age_desc（築古い順）, floor_desc（高層階順）
+    - upsert COALESCEマージ改善: 全26カラムでCOALESCE — 新データがNULLの場合に既存データを保持
+  - **CSVエクスポート改善**: building_area, land_area, total_floors を追加
+  - **型定義 (types/index.ts)**:
+    - SearchParams に floorMin, landAreaMin, buildingAreaMin, structure, hasCoordinates を追加
+    - sortBy に age_asc, age_desc, floor_desc を追加
+  - **フロントエンドUI (index.tsx)**:
+    - 検索フォーム4行目追加: 構造フィルター（RC造/SRC造/鉄骨/木造/軽量鉄骨）, 階数下限フィルター, 土地面積下限フィルター
+    - ソートセレクト拡張: 「築浅い順」「築古い順」「高層階順」を追加
+    - フィルターチップに構造・階数・土地面積を反映
+    - /api/health バージョン 6.0.0 → 7.0.0
+- **デプロイ**: 未（Desktop側でmasterマージ後にデプロイ）
+- **次のタスク**: Desktop側でmasterマージ → wrangler deploy → 全機能動作検証
