@@ -7,3 +7,5 @@ dist/
 *.log
 .DS_Store
 desktop.ini
+.claude/scheduled_tasks.lock
+.claude/*.lock
