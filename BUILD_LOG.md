@@ -102,3 +102,28 @@
 - **変更内容**: CLAUDE.md・BUILD_LOG.mdをmasterブランチに直接反映。マージ不要でDesktop側にも同期プロトコルが自動適用される仕組みを構築
 - **デプロイ**: 不要
 - **次のタスク**: なし（同期基盤完成）
+
+## 2026-04-17 11:04 (Desktop)
+- **環境**: Desktop (Claude Code) — 34エージェント並列実行
+- **ブランチ**: master
+- **変更内容**:
+  - `/remoteset` カスタムスキル作成（~/.claude/skills/remoteset/）
+  - GitHub Claude App をkoki-187アカウントにインストール（Read & Write権限）
+  - GitHub CLI (gh) インストール&認証完了
+  - scripts/ 一式新規作成: health-check.sh / test.sh / lint.sh / deploy.sh / auto-push.sh
+  - .gitignore に .claude/scheduled_tasks.lock 追加
+  - エージェント並列調査: スクレイパー実装状況・画像パイプライン・重複検知ロジック
+- **デプロイ**: 不要（インフラ整備のみ）
+- **次のタスク**: D1未インポート行のリカバリ
+
+## 2026-04-17 12:30 (Desktop)
+- **環境**: Desktop (Claude Code) — D1バルクインポート
+- **ブランチ**: master
+- **変更内容**: D1再インポート完了 — `d1_bulk_import_v2.mjs` を再実行し、欠損していた約30万行を追加
+  - インポート前: 619,063件
+  - インポート後: 926,226件 (+307,163件、エラー0件)
+  - active: 296,141 → 449,934 (+153,793)
+  - sold: 322,922 → 476,292 (+153,370)
+  - サイト別: reins +210k / athome +49k / suumo +47k
+- **デプロイ**: 不要（D1直接更新）
+- **次のタスク**: スクレイパーHTMLパース改修・画像パイプライン実装・fingerprint計算ロジック追加
