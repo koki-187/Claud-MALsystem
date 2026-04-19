@@ -259,3 +259,15 @@
 - **テスト**: 71/71 PASS
 - **デプロイ**: 未 (wrangler deployはデスクトップ環境で実行)
 - **次のタスク**: デプロイ実行
+
+## 2026-04-19 22:30 (Desktop) — Phase 1 + Phase 2 完全実装＋本番デプロイ完了
+- **環境**: Desktop (Claude Code) — 4並列executor agent
+- **ブランチ**: master
+- **変更内容**:
+  - **Phase 1完成** (`237b130`): TERASS PICKS 自動抽出パイプライン
+  - **Phase 2完成** (`f9651a9` + `67e745d` + `86bdd4b` + `55bbf70`): linkedom 9サイト全面書換 — テスト合計187 pass
+  - **Manual scrape API** (`cb12d33`): `POST /api/admin/scrape` 追加
+- **デプロイ**: 済 (Version `4a41fb27`)
+- **検証結果**: 9サイト × 3都道府県 = 27ジョブ全て例外なく実行確認 (mock廃止＋linkedomパース動作OK)
+  - ⚠️ **D1 size limit到達** (589MB / 926k rows) — 新規スクレイプ書込が `D1_ERROR: Exceeded maximum DB size`
+- **次のタスク**: D1容量対策 (sold cleanup or paid plan upgrade) → 容量解決後 cron で実データ蓄積開始
