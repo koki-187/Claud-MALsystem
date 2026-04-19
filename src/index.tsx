@@ -9,6 +9,7 @@ import { aggregateSearch, runScheduledScrape } from './scrapers/aggregator';
 import { PREFECTURES, SITES } from './types';
 import { admin as adminRoutes } from './routes/admin';
 import { processQueue } from './services/image-pipeline';
+import { archiveOldestCold } from './services/archive';
 
 const app = new Hono<{ Bindings: Bindings; Variables: AppVariables }>();
 
@@ -282,13 +283,17 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
   }
   // 毎時: 画像キューを最大50件処理
   ctx.waitUntil(processQueue(env, 50).catch(console.error));
-  // D1容量監視: 450MB超で警告ログ
+  // D1容量監視: 450MB超で自動アーカイブ (5 batch × 2,000件 = 最大10,000件)
   ctx.waitUntil((async () => {
     try {
       const cap = await env.MAL_DB.prepare('SELECT COUNT(*) AS n FROM properties').first<{ n: number }>();
       const mb = (cap?.n ?? 0) * 635 / 1024 / 1024;
-      if (mb > 450) console.error(`[D1-CAPACITY-ALERT] ${mb.toFixed(0)}MB / 500MB`);
-    } catch { /* ignore */ }
+      if (mb >= 450) {
+        console.error(`[D1-CAPACITY-ALERT] ${mb.toFixed(0)}MB >= 450MB — starting auto-archive`);
+        const result = await archiveOldestCold(env, 5, 2000);
+        console.log(`[D1-AUTO-ARCHIVE] archived=${result.archived} deleted=${result.deleted} keys=${result.r2Keys.length}`);
+      }
+    } catch (e) { console.error('[D1-CAPACITY-CHECK-ERROR]', e); }
   })());
 };
 

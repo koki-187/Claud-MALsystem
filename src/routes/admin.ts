@@ -3,6 +3,8 @@ import type { Bindings } from '../types';
 import type { AdminStats, SiteId, PrefectureCode } from '../types';
 import { enqueueAll, processQueue } from '../services/image-pipeline';
 import { runScheduledScrape } from '../scrapers/aggregator';
+import { archiveOldestCold } from '../services/archive';
+import { discoverTerassImages } from '../services/terass-image-fetch';
 
 const admin = new Hono<{ Bindings: Bindings }>();
 
@@ -438,17 +440,22 @@ admin.post('/backfill-images', async (c) => {
 });
 
 // ─── POST /api/admin/backfill-detail-urls ────────────────────────────────────
-// fingerprintが一致する行から detail_url を補完
+// fingerprintが一致する行から detail_url を補完 (donor が実際に存在する行のみ更新)
 admin.post('/backfill-detail-urls', async (c) => {
   const r = await c.env.MAL_DB.prepare(`
     UPDATE properties AS t
-    SET detail_url = COALESCE(
-      (SELECT detail_url FROM properties
-       WHERE fingerprint = t.fingerprint
-         AND detail_url IS NOT NULL AND detail_url != ''
-       LIMIT 1), t.detail_url)
+    SET detail_url = (
+      SELECT detail_url FROM properties
+      WHERE fingerprint = t.fingerprint
+        AND detail_url IS NOT NULL AND detail_url != ''
+      LIMIT 1)
     WHERE (t.detail_url IS NULL OR t.detail_url = '')
       AND t.fingerprint IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM properties
+        WHERE fingerprint = t.fingerprint
+          AND detail_url IS NOT NULL AND detail_url != ''
+      )
   `).run();
   return c.json({ updated: r.meta?.changes ?? 0 });
 });
@@ -479,17 +486,113 @@ admin.get('/d1-capacity', async (c) => {
 // ─── POST /api/admin/archive-cold ────────────────────────────────────────────
 // status='sold'/'delisted' 行を R2 へ JSONL ダンプし D1 から削除
 admin.post('/archive-cold', async (c) => {
-  const limit = Number(new URL(c.req.url).searchParams.get('limit') ?? '1000');
-  const rows = await c.env.MAL_DB.prepare(
-    "SELECT * FROM properties WHERE status IN ('sold','delisted') LIMIT ?"
-  ).bind(limit).all();
-  if (!rows.results || rows.results.length === 0) return c.json({ archived: 0 });
-  const jsonl = rows.results.map(r => JSON.stringify(r)).join('\n');
-  const key = `archive/properties/${new Date().toISOString().slice(0, 10)}_${Date.now()}.jsonl`;
-  await c.env.MAL_STORAGE.put(key, jsonl, { httpMetadata: { contentType: 'application/x-ndjson' } });
-  const ids = rows.results.map(r => `'${(r as Record<string, unknown>).id}'`).join(',');
-  const del = await c.env.MAL_DB.prepare(`DELETE FROM properties WHERE id IN (${ids})`).run();
-  return c.json({ archived: rows.results.length, deleted: del.meta?.changes ?? 0, r2Key: key });
+  const batches   = Number(c.req.query('batches')    ?? '1');
+  const batchSize = Number(c.req.query('batch_size') ?? '1000');
+  try {
+    const result = await archiveOldestCold(c.env, batches, batchSize);
+    return c.json(result);
+  } catch (e) {
+    console.error('[admin/archive-cold] error:', e);
+    return c.json({ error: 'Internal error' }, 500);
+  }
+});
+
+// ─── GET /api/admin/archive/list ─────────────────────────────────────────────
+admin.get('/archive/list', async (c) => {
+  const prefix = c.req.query('prefix') ?? 'archive/properties/';
+  try {
+    const listed = await c.env.MAL_STORAGE.list({ prefix });
+    const objects = (listed.objects ?? []).map(o => ({
+      key:          o.key,
+      size:         o.size,
+      uploaded:     o.uploaded?.toISOString() ?? null,
+      etag:         o.etag,
+    }));
+    return c.json({ objects, truncated: listed.truncated });
+  } catch (e) {
+    console.error('[admin/archive/list] error:', e);
+    return c.json({ error: 'Internal error' }, 500);
+  }
+});
+
+// ─── POST /api/admin/archive/restore ─────────────────────────────────────────
+// body: { r2Key: string } → JSONL読み込み → D1 に INSERT OR IGNORE で復元
+admin.post('/archive/restore', async (c) => {
+  let body: { r2Key?: string };
+  try {
+    body = await c.req.json<{ r2Key?: string }>();
+  } catch {
+    return c.json({ error: 'JSON body required: { r2Key: string }' }, 400);
+  }
+  const r2Key = body.r2Key;
+  if (!r2Key) return c.json({ error: 'r2Key is required' }, 400);
+
+  const obj = await c.env.MAL_STORAGE.get(r2Key);
+  if (!obj) return c.json({ error: `R2 object not found: ${r2Key}` }, 404);
+
+  const text = await obj.text();
+  const lines = text.split('\n').filter(l => l.trim());
+  let restored = 0, skipped = 0, errors = 0;
+
+  for (const line of lines) {
+    let row: Record<string, unknown>;
+    try { row = JSON.parse(line); } catch { errors++; continue; }
+
+    try {
+      await c.env.MAL_DB.prepare(`
+        INSERT OR IGNORE INTO properties (
+          id, site_id, site_property_id, title, property_type, status,
+          prefecture, city, address, price, price_text, area,
+          rooms, age, floor, station, station_minutes,
+          management_fee, repair_fund, direction, structure,
+          yield_rate, thumbnail_url, detail_url, description,
+          fingerprint, latitude, longitude,
+          listed_at, sold_at, last_seen_at,
+          created_at, updated_at, scraped_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?,
+          ?, ?, ?, ?,
+          ?, ?, ?,
+          ?, ?, ?,
+          ?, ?, ?
+        )
+      `).bind(
+        row.id ?? null, row.site_id ?? null, row.site_property_id ?? null,
+        row.title ?? '', row.property_type ?? 'other', row.status ?? 'active',
+        row.prefecture ?? '13', row.city ?? '', row.address ?? null,
+        row.price ?? null, row.price_text ?? '',
+        row.area ?? null, row.rooms ?? null, row.age ?? null, row.floor ?? null,
+        row.station ?? null, row.station_minutes ?? null,
+        row.management_fee ?? null, row.repair_fund ?? null,
+        row.direction ?? null, row.structure ?? null,
+        row.yield_rate ?? null, row.thumbnail_url ?? null,
+        row.detail_url ?? '', row.description ?? null,
+        row.fingerprint ?? null, row.latitude ?? null, row.longitude ?? null,
+        row.listed_at ?? null, row.sold_at ?? null, row.last_seen_at ?? null,
+        row.created_at ?? null, row.updated_at ?? null, row.scraped_at ?? null,
+      ).run();
+      restored++;
+    } catch {
+      skipped++;
+    }
+  }
+
+  return c.json({ r2Key, total: lines.length, restored, skipped, errors });
+});
+
+// ─── POST /api/admin/terass-image-discover ───────────────────────────────────
+admin.post('/terass-image-discover', async (c) => {
+  const limit = Math.min(Number(c.req.query('limit') ?? '100'), 500);
+  try {
+    const result = await discoverTerassImages(c.env, limit);
+    return c.json(result);
+  } catch (e) {
+    console.error('[admin/terass-image-discover] error:', e);
+    return c.json({ error: 'Internal error' }, 500);
+  }
 });
 
 export { admin };
