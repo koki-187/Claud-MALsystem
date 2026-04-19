@@ -242,3 +242,20 @@
   - `npm install` を実行して playwright をローカルにインストール
   - Chrome を `--remote-debugging-port=9222` で起動して `node scripts/extract-terass.mjs --dry-run` で動作確認
   - スクレイパー改修 Phase 2 (linkedom導入)
+
+---
+
+## 2026-04-19 (Web/Remote) — Phase 2 batch A
+- **環境**: Web (Claude Code Remote)
+- **ブランチ**: master
+- **変更内容**: Phase 2 batch A — athome/fudosan/chintai/smaity 全面書換
+  - `src/scrapers/athome.ts` 全面書換: mockフォールバック廃止、JSON-LD優先 → CSSセレクタfallback の2段構え (SUUMO/HOME'Sと同パターン)
+  - `src/scrapers/fudosan.ts` 全面書換: 同パターン
+  - `src/scrapers/chintai.ts` 全面書換: 同パターン + 賃貸家賃専用priceText (家賃X万円/月)、propertyType `chintai_mansion`
+  - `src/scrapers/smaity.ts` 全面書換: 同パターン + propertyType `investment` + additionalProperty 経由 yieldRate 抽出
+  - テストフィクスチャ4件新規作成 (JSON-LD 2件 + DOMカード 2件 × 4サイト)
+  - テスト4件新規作成 (athome:17件, fudosan:17件, chintai:17件, smaity:20件 計71テスト全PASS)
+- **TypeScript**: `tsc --noEmit` ゼロエラー
+- **テスト**: 71/71 PASS
+- **デプロイ**: 未 (wrangler deployはデスクトップ環境で実行)
+- **次のタスク**: デプロイ実行
