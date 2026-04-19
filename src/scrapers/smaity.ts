@@ -3,9 +3,70 @@ import type { Property, PrefectureCode } from '../types';
 import type { ScrapeContext } from './base';
 import {
   parseDocument,
-  extractJsonLd,
-  findJsonLdByType,
 } from '../parsers/html-parser';
+
+// Smaity prefecture code → URL slug mapping
+const SMAITY_PREF_SLUGS: Record<string, string> = {
+  '01': 'hokkaido',
+  '02': 'aomori',
+  '03': 'iwate',
+  '04': 'miyagi',
+  '05': 'akita',
+  '06': 'yamagata',
+  '07': 'fukushima',
+  '08': 'ibaraki',
+  '09': 'tochigi',
+  '10': 'gunma',
+  '11': 'saitama',
+  '12': 'chiba',
+  '13': 'tokyo',
+  '14': 'kanagawa',
+  '15': 'niigata',
+  '16': 'toyama',
+  '17': 'ishikawa',
+  '18': 'fukui',
+  '19': 'yamanashi',
+  '20': 'nagano',
+  '21': 'gifu',
+  '22': 'shizuoka',
+  '23': 'aichi',
+  '24': 'mie',
+  '25': 'shiga',
+  '26': 'kyoto',
+  '27': 'osaka',
+  '28': 'hyogo',
+  '29': 'nara',
+  '30': 'wakayama',
+  '31': 'tottori',
+  '32': 'shimane',
+  '33': 'okayama',
+  '34': 'hiroshima',
+  '35': 'yamaguchi',
+  '36': 'tokushima',
+  '37': 'kagawa',
+  '38': 'ehime',
+  '39': 'kochi',
+  '40': 'fukuoka',
+  '41': 'saga',
+  '42': 'nagasaki',
+  '43': 'kumamoto',
+  '44': 'oita',
+  '45': 'miyazaki',
+  '46': 'kagoshima',
+  '47': 'okinawa',
+};
+
+// 都道府県スラッグ → {slug}_prop (物件詳細URL生成用)
+const SMAITY_PROP_PREFIX: Record<string, string> = {
+  'tokyo': 'tokyo',
+  'kanagawa': 'kanagawa',
+  'osaka': 'osaka',
+  'aichi': 'aichi',
+  'saitama': 'saitama',
+  'chiba': 'chiba',
+  'hyogo': 'hyogo',
+  'fukuoka': 'fukuoka',
+};
 
 export class SmaityScraper extends BaseScraper {
   constructor() {
@@ -13,181 +74,39 @@ export class SmaityScraper extends BaseScraper {
   }
 
   async scrapeListings(ctx: ScrapeContext): Promise<Property[]> {
-    const page = ctx.page ?? 1;
-    // Smaity 投資用物件一覧 URL
-    const url =
-      `https://sumaity.com/property/search/?pref=${ctx.prefecture}&page=${page}`;
+    const slug = SMAITY_PREF_SLUGS[ctx.prefecture];
+    if (!slug) return [];
+
+    // Smaity 中古マンション一覧 URL (投資用に限定されないが実用的なデータが取れる)
+    // メインコンテンツはJS動的生成のため、サイドバーの「新着物件」と
+    // テーマリンクから物件を収集する
+    const url = `https://sumaity.com/mansion/used/${slug}/`;
 
     const html = await this.fetchHtml(url);
     if (!html) return [];
 
-    return this.parseListings(html, ctx.prefecture);
+    return this.parseListings(html, ctx.prefecture, slug);
   }
 
-  private parseListings(html: string, prefecture: PrefectureCode): Property[] {
-    // --- Pass 1: JSON-LD structured data (most reliable when present) ---
-    const jsonLdResults = this.parseFromJsonLd(html, prefecture);
-    if (jsonLdResults.length > 0) return jsonLdResults;
-
-    // --- Pass 2: CSS selector DOM parsing ---
-    return this.parseFromDom(html, prefecture);
-  }
-
-  // ── JSON-LD pass ──────────────────────────────────────────────────────────
-
-  private parseFromJsonLd(html: string, prefecture: PrefectureCode): Property[] {
-    const doc = parseDocument(html);
-    if (!doc) return [];
-
-    const items = extractJsonLd(doc);
-    const nodes = findJsonLdByType(
-      items,
-      'RealEstateListing',
-      'Product',
-      'Apartment',
-      'House',
-      'SingleFamilyResidence',
-    );
-    if (nodes.length === 0) return [];
-
-    const properties: Property[] = [];
-    for (const node of nodes) {
-      try {
-        const partial = this.jsonLdNodeToPartial(node);
-        if (!partial.title || !partial.detailUrl) continue;
-
-        const sitePropertyId = this.idFromUrl(partial.detailUrl);
-        const city = partial.city ?? this.cityFromAddress(partial.address ?? '') ?? '';
-        const fingerprint = this.computeFingerprint({
-          prefecture,
-          city,
-          price: partial.price ?? null,
-          area: partial.area ?? null,
-          rooms: partial.rooms ?? null,
-        });
-
-        properties.push(this.buildBaseProperty({
-          sitePropertyId,
-          title: partial.title,
-          propertyType: 'investment',
-          prefecture,
-          city,
-          detailUrl: partial.detailUrl,
-          ...partial,
-          fingerprint,
-        }));
-      } catch { continue; }
-    }
-    return properties;
-  }
-
-  /** Convert a JSON-LD node into a partial Property. */
-  private jsonLdNodeToPartial(node: Record<string, unknown>): Partial<Property> & { city?: string } {
-    const partial: Partial<Property> & { city?: string } = {};
-
-    if (typeof node['name'] === 'string') partial.title = node['name'].trim();
-    if (typeof node['description'] === 'string') partial.description = node['description'].trim();
-    if (typeof node['url'] === 'string') partial.detailUrl = node['url'];
-
-    // Offer / price
-    const offer = node['offers'];
-    if (offer && typeof offer === 'object' && !Array.isArray(offer)) {
-      const o = offer as Record<string, unknown>;
-      const rawPrice = o['price'];
-      if (rawPrice !== undefined) {
-        const p = parseFloat(String(rawPrice));
-        if (!isNaN(p)) {
-          partial.price = p >= 100000 ? Math.round(p / 10000) : p;
-          partial.priceText = `${partial.price.toLocaleString()}万円`;
-        }
-      }
-    }
-
-    // Floor size
-    const floorSize = node['floorSize'];
-    if (floorSize && typeof floorSize === 'object' && !Array.isArray(floorSize)) {
-      const fs = floorSize as Record<string, unknown>;
-      const val = parseFloat(String(fs['value'] ?? ''));
-      if (!isNaN(val)) partial.area = val;
-    }
-
-    // Geo
-    const geo = node['geo'];
-    if (geo && typeof geo === 'object' && !Array.isArray(geo)) {
-      const g = geo as Record<string, unknown>;
-      if (typeof g['latitude'] === 'number') partial.latitude = g['latitude'];
-      if (typeof g['longitude'] === 'number') partial.longitude = g['longitude'];
-    }
-
-    // Images
-    const img = node['image'];
-    if (typeof img === 'string') {
-      partial.thumbnailUrl = img;
-      partial.images = [img];
-    } else if (Array.isArray(img) && img.length > 0) {
-      partial.thumbnailUrl = String(img[0]);
-      partial.images = img.slice(0, 10).map(String);
-    }
-
-    // Yield rate — Smaity-specific additionalProperty or numeric field
-    const yieldNode = node['additionalProperty'];
-    if (Array.isArray(yieldNode)) {
-      for (const prop of yieldNode) {
-        if (
-          prop &&
-          typeof prop === 'object' &&
-          (prop as Record<string, unknown>)['name'] === '表面利回り'
-        ) {
-          const v = parseFloat(String((prop as Record<string, unknown>)['value'] ?? ''));
-          if (!isNaN(v)) partial.yieldRate = v;
-        }
-      }
-    }
-
-    // Address
-    const addr = node['address'];
-    if (addr && typeof addr === 'object' && !Array.isArray(addr)) {
-      const a = addr as Record<string, unknown>;
-      const streetAddress = typeof a['streetAddress'] === 'string' ? a['streetAddress'] : '';
-      const locality = typeof a['addressLocality'] === 'string' ? a['addressLocality'] : '';
-      partial.address = [locality, streetAddress].filter(Boolean).join(' ') || null;
-      partial.city = locality || undefined;
-    } else if (typeof addr === 'string') {
-      partial.address = addr;
-      partial.city = this.cityFromAddress(addr) ?? undefined;
-    }
-
-    return partial;
+  private parseListings(html: string, prefecture: PrefectureCode, prefSlug: string): Property[] {
+    return this.parseFromDom(html, prefecture, prefSlug);
   }
 
   // ── CSS selector DOM pass ─────────────────────────────────────────────────
 
-  private parseFromDom(html: string, prefecture: PrefectureCode): Property[] {
+  private parseFromDom(html: string, prefecture: PrefectureCode, prefSlug: string): Property[] {
     const doc = parseDocument(html);
     if (!doc) return [];
 
     const properties: Property[] = [];
 
-    // Smaity 一覧ページの物件カードセレクタ候補
-    const cardSelectors = [
-      '.property-card',              // メインカード
-      '.item-card',                  // 旧スタイル
-      '[data-property-id]',          // data属性ベース
-      '.investment-card',            // 投資物件カード
-      '.listing-item',               // リスト形式
-    ];
+    // スマイティ: サイドバーの「新着物件」セクション
+    // <li class="p-sidemenu-cassette__item"> 各物件カード
+    const sidebarItems = Array.from(doc.querySelectorAll('.p-sidemenu-cassette__item'));
 
-    let cards: Element[] = [];
-    for (const sel of cardSelectors) {
-      const found = Array.from(doc.querySelectorAll(sel));
-      if (found.length > 0) { cards = found; break; }
-    }
-
-    if (cards.length === 0) return [];
-
-    for (const card of cards.slice(0, 20)) {
+    for (const item of sidebarItems.slice(0, 20)) {
       try {
-        const prop = this.cardToProperty(card, prefecture);
+        const prop = this.sidebarItemToProperty(item, prefecture, prefSlug);
         if (prop) properties.push(prop);
       } catch { continue; }
     }
@@ -195,94 +114,66 @@ export class SmaityScraper extends BaseScraper {
     return properties;
   }
 
-  private cardToProperty(card: Element, prefecture: PrefectureCode): Property | null {
-    // Title & detail URL
-    const linkEl =
-      card.querySelector('.property-title a') ??
-      card.querySelector('h2 a') ??
-      card.querySelector('h3 a') ??
-      card.querySelector('a[href*="/property/"]') ??
-      card.querySelector('a[href*="/bukken/"]') ??
-      card.querySelector('a');
-
+  private sidebarItemToProperty(
+    item: Element,
+    prefecture: PrefectureCode,
+    prefSlug: string,
+  ): Property | null {
+    // Detail URL: <a href="https://sumaity.com/mansion/used/{pref}_prop/prop_XXXXXXXX/">
+    const linkEl = item.querySelector('a');
     const href = linkEl?.getAttribute('href') ?? '';
-    const titleText =
-      linkEl?.textContent?.trim() ??
-      card.querySelector('[class*="title"]')?.textContent?.trim() ??
-      card.querySelector('[class*="name"]')?.textContent?.trim() ?? '';
-    if (!titleText) return null;
+    if (!href) return null;
 
     const detailUrl = href.startsWith('http') ? href : `https://sumaity.com${href}`;
     const sitePropertyId = this.idFromUrl(detailUrl);
 
-    // Price
-    const priceText = this.firstText(card, [
-      '.property-price',
-      '[class*="price"]',
-      '[class*="kakaku"]',
-      '[class*="kingaku"]',
-    ]) ?? '';
-    const { price, priceText: priceLabel } = this.extractPrice(priceText);
+    // Price: <span class="price">1,799</span>万円
+    const priceText = item.querySelector('.p-sidemenu-cassette__cost')?.textContent?.trim() ?? '';
+    const { price, priceLabel } = this.parseSmaityPrice(priceText);
 
-    // Area
-    const areaText = this.firstText(card, [
-      '.property-area',
-      '[class*="area"]',
-      '[class*="menseki"]',
-    ]) ?? '';
+    // Layout + area + age: <ul class="p-sidemenu-cassette__layout">
+    // items: ["3LDK", "58.66m²", "築50年"]
+    const layoutItems = Array.from(item.querySelectorAll('.p-sidemenu-cassette__layout li'));
+    const rooms = layoutItems[0]?.textContent?.trim() ?? null;
+    const areaText = layoutItems[1]?.textContent?.trim() ?? '';
     const area = this.extractArea(areaText);
+    const ageText = layoutItems[2]?.textContent?.trim() ?? '';
+    const ageMatch = ageText.match(/築(\d+)年/);
+    const age = ageMatch ? parseInt(ageMatch[1]) : null;
 
-    // Rooms
-    const roomsText = this.firstText(card, [
-      '[class*="madori"]',
-      '[class*="rooms"]',
-      '[class*="layout"]',
-    ]) ?? '';
-    const rooms = roomsText.match(/(\d[LDKS1-9][DKSR]*)/)?.[1] ?? null;
-
-    // Station
-    const stationText = this.firstText(card, [
-      '[class*="station"]',
-      '[class*="route"]',
-      '[class*="traffic"]',
-      '[class*="ensen"]',
-    ]) ?? card.textContent ?? '';
+    // Station: <ul class="p-sidemenu-cassette__station"> li
+    const stationText = item.querySelector('.p-sidemenu-cassette__station li')?.textContent?.trim() ?? '';
     const { station, stationMinutes } = this.extractStation(stationText);
 
-    // Yield rate — 表面利回り XX%
-    const cardText = card.textContent ?? '';
-    const yieldMatch = cardText.match(/表面利回り[^\d]*(\d+(?:\.\d+)?)%/);
-    const yieldRate = yieldMatch ? parseFloat(yieldMatch[1]) : null;
+    // Management fee (管理費) and repair fund (修繕積立金)
+    const specItems = Array.from(item.querySelectorAll('.p-sidemenu-cassette__estate-spec dd'));
+    const managementFee = specItems[0] ? parseInt(specItems[0].textContent?.replace(/[^0-9]/g, '') ?? '0') || null : null;
+    const repairFund = specItems[1] ? parseInt(specItems[1].textContent?.replace(/[^0-9]/g, '') ?? '0') || null : null;
 
-    // Age
-    const age = this.extractAge(cardText);
+    // Thumbnail: CSS background-image or data-original
+    const imgDiv = item.querySelector('.p-sidemenu-cassette__image');
+    const bgStyle = imgDiv?.getAttribute('style') ?? '';
+    const bgMatch = bgStyle.match(/url\(['"]?([^'")\s]+)['"]?\)/);
+    const thumbnailUrl = bgMatch ? bgMatch[1] : null;
+    const images = thumbnailUrl ? [thumbnailUrl] : [];
 
-    // City / address
-    const addrText = this.firstText(card, [
-      '[class*="address"]',
-      '[class*="location"]',
-      '[class*="chiiki"]',
-    ]) ?? '';
-    const city = addrText.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+    // Build title from rooms + area (no explicit title in sidebar cards)
+    const titleParts = [
+      rooms,
+      area ? `${area}m²` : null,
+      stationText || null,
+    ].filter(Boolean);
+    const title = titleParts.join(' ') || `${prefecture}の中古マンション`;
 
-    // Images
-    const imgSrcs = Array.from(card.querySelectorAll('img'))
-      .map(img => img.getAttribute('src') ?? '')
-      .filter(s => s.startsWith('http') && !s.match(/(?:logo|icon|sprite|blank|pixel)/i))
-      .slice(0, 10);
-
-    const thumbnailUrl = imgSrcs[0] ?? null;
-
-    const managementFee = this.extractMonthlyFee(cardText, '管理費');
-    const direction = this.extractDirection(cardText);
-    const structure = this.extractStructure(cardText);
+    // Address/city — not directly shown in sidebar, use prefecture info
+    const city = stationText.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
 
     const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms });
 
     return this.buildBaseProperty({
       sitePropertyId,
-      title: titleText,
-      propertyType: 'investment',
+      title,
+      propertyType: 'mansion',
       prefecture,
       city,
       detailUrl,
@@ -293,33 +184,30 @@ export class SmaityScraper extends BaseScraper {
       age,
       station,
       stationMinutes,
-      thumbnailUrl,
-      images: imgSrcs,
       managementFee,
-      direction,
-      structure,
-      yieldRate,
+      repairFund,
+      thumbnailUrl,
+      images,
       fingerprint,
     });
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  private firstText(card: Element, selectors: string[]): string | null {
-    for (const sel of selectors) {
-      const text = card.querySelector(sel)?.textContent?.trim();
-      if (text) return text;
-    }
-    return null;
+  /** Smaity price format: "1,799\n万円" or "1億\n5,000\n万円" */
+  private parseSmaityPrice(text: string): { price: number | null; priceLabel: string } {
+    const cleaned = text.replace(/[\s\n]/g, '');
+    const { price, priceText } = this.extractPrice(cleaned);
+    return { price, priceLabel: priceText };
   }
 
+  /** Build a stable site_property_id from a detail URL. */
   private idFromUrl(url: string): string {
-    const m = url.match(/\/(\d{6,})\//);
-    if (m) return m[1];
+    // /mansion/used/tokyo_prop/prop_19687931/ → 19687931
+    const propMatch = url.match(/prop_(\d+)/);
+    if (propMatch) return propMatch[1];
+    const numMatch = url.match(/\/(\d{6,})\//);
+    if (numMatch) return numMatch[1];
     return btoa(encodeURIComponent(url.replace(/https?:\/\/[^/]+/, ''))).slice(0, 24);
-  }
-
-  private cityFromAddress(addr: string): string | null {
-    return addr.match(/([^\s　]+[市区町村])/)?.[1] ?? null;
   }
 }

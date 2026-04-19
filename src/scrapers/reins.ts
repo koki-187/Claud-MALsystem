@@ -7,32 +7,38 @@ import {
   findJsonLdByType,
 } from '../parsers/html-parser';
 
+/**
+ * REINS (Real Estate Information Network System) scraper.
+ *
+ * REINS (東日本不動産流通機構 / 全宅連) is a closed MLS (Multiple Listing Service)
+ * operated by the Ministry of Land, Infrastructure, Transport and Tourism.
+ * - Public-facing site (reins.or.jp) is informational only — no public property search.
+ * - Property search requires a real estate agent login.
+ * - Public API endpoint exists but only for registered agents.
+ *
+ * As a result, this scraper always returns an empty array.
+ * The aggregator will record this as `skipped_mock` which is the expected behavior.
+ *
+ * If public REINS data becomes available via an official API in the future,
+ * update `scrapeListings` with the appropriate endpoint and auth flow.
+ */
 export class ReinsScraper extends BaseScraper {
   constructor() {
     super('reins');
   }
 
-  async scrapeListings(ctx: ScrapeContext): Promise<Property[]> {
-    const page = ctx.page ?? 1;
-    // REINS (不動産流通機構) 物件検索 URL
-    const url = `https://www.reins.or.jp/search/?prefecture=${ctx.prefecture}&page=${page}`;
-
-    const html = await this.fetchHtml(url);
-    if (!html) return [];
-
-    return this.parseListings(html, ctx.prefecture);
+  async scrapeListings(_ctx: ScrapeContext): Promise<Property[]> {
+    // REINS does not have a public property listing page accessible without login.
+    // Return empty array so the aggregator marks this as skipped_mock (no data).
+    return [];
   }
 
+  // Kept for potential future use when/if public REINS data becomes available.
   private parseListings(html: string, prefecture: PrefectureCode): Property[] {
-    // --- Pass 1: JSON-LD structured data (most reliable when present) ---
     const jsonLdResults = this.parseFromJsonLd(html, prefecture);
     if (jsonLdResults.length > 0) return jsonLdResults;
-
-    // --- Pass 2: CSS selector DOM parsing ---
     return this.parseFromDom(html, prefecture);
   }
-
-  // ── JSON-LD pass ──────────────────────────────────────────────────────────
 
   private parseFromJsonLd(html: string, prefecture: PrefectureCode): Property[] {
     const doc = parseDocument(html);
@@ -80,7 +86,6 @@ export class ReinsScraper extends BaseScraper {
     return properties;
   }
 
-  /** Convert a JSON-LD node into a partial Property. */
   private jsonLdNodeToPartial(node: Record<string, unknown>): Partial<Property> & { city?: string } {
     const partial: Partial<Property> & { city?: string } = {};
 
@@ -88,7 +93,6 @@ export class ReinsScraper extends BaseScraper {
     if (typeof node['description'] === 'string') partial.description = node['description'].trim();
     if (typeof node['url'] === 'string') partial.detailUrl = node['url'];
 
-    // Offer / price
     const offer = node['offers'];
     if (offer && typeof offer === 'object' && !Array.isArray(offer)) {
       const o = offer as Record<string, unknown>;
@@ -102,7 +106,6 @@ export class ReinsScraper extends BaseScraper {
       }
     }
 
-    // Floor size
     const floorSize = node['floorSize'];
     if (floorSize && typeof floorSize === 'object' && !Array.isArray(floorSize)) {
       const fs = floorSize as Record<string, unknown>;
@@ -110,7 +113,6 @@ export class ReinsScraper extends BaseScraper {
       if (!isNaN(val)) partial.area = val;
     }
 
-    // Geo
     const geo = node['geo'];
     if (geo && typeof geo === 'object' && !Array.isArray(geo)) {
       const g = geo as Record<string, unknown>;
@@ -118,7 +120,6 @@ export class ReinsScraper extends BaseScraper {
       if (typeof g['longitude'] === 'number') partial.longitude = g['longitude'];
     }
 
-    // Images
     const img = node['image'];
     if (typeof img === 'string') {
       partial.thumbnailUrl = img;
@@ -128,7 +129,6 @@ export class ReinsScraper extends BaseScraper {
       partial.images = img.slice(0, 10).map(String);
     }
 
-    // Address
     const addr = node['address'];
     if (addr && typeof addr === 'object' && !Array.isArray(addr)) {
       const a = addr as Record<string, unknown>;
@@ -144,24 +144,18 @@ export class ReinsScraper extends BaseScraper {
     return partial;
   }
 
-  // ── CSS selector DOM pass ─────────────────────────────────────────────────
-
   private parseFromDom(html: string, prefecture: PrefectureCode): Property[] {
     const doc = parseDocument(html);
     if (!doc) return [];
 
-    // og:image for thumbnail fallback
     const ogImage = doc.querySelector('meta[property="og:image"]')?.getAttribute('content') ?? null;
-
     const properties: Property[] = [];
 
-    // REINS 一覧ページのカードセレクタ候補
     const cardSelectors = [
-      '.bukken-row',            // 主セレクタ
-      'tr.bukken-row',          // テーブル行スタイル
-      '.property-item',         // 汎用カード
-      '[data-property-id]',     // data属性ベース
-      '.cassette_inner',        // 汎用フォールバック
+      '.bukken-row',
+      'tr.bukken-row',
+      '.property-item',
+      '[data-property-id]',
     ];
 
     let cards: Element[] = [];
@@ -187,7 +181,6 @@ export class ReinsScraper extends BaseScraper {
     pageOgImage: string | null,
     prefecture: PrefectureCode,
   ): Property | null {
-    // Title & detail URL
     const linkEl =
       card.querySelector('.property-name a') ??
       card.querySelector('.bukken-name a') ??
@@ -205,49 +198,26 @@ export class ReinsScraper extends BaseScraper {
     const detailUrl = href.startsWith('http') ? href : `https://www.reins.or.jp${href}`;
     const sitePropertyId = this.idFromUrl(detailUrl);
 
-    // Price
-    const priceText = this.firstText(card, [
-      '.price',
-      '[class*="price"]',
-      'td.price',
-    ]) ?? '';
+    const priceText = this.firstText(card, ['.price', '[class*="price"]', 'td.price']) ?? '';
     const { price, priceText: priceLabel } = this.extractPrice(priceText);
 
-    // Area
-    const areaText = this.firstText(card, [
-      '.area',
-      '[class*="area"]',
-      'td.area',
-    ]) ?? card.textContent ?? '';
+    const areaText = this.firstText(card, ['.area', '[class*="area"]', 'td.area']) ?? card.textContent ?? '';
     const area = this.extractArea(areaText);
 
-    // Rooms
     const cardText = card.textContent ?? '';
     const rooms = cardText.match(/([1-9][LDKSR]+)/)?.[1] ?? null;
-
-    // Station
     const { station, stationMinutes } = this.extractStation(cardText);
-
-    // Age
     const age = this.extractAge(cardText);
 
-    // City / address
-    const addrText = this.firstText(card, [
-      '.address',
-      '[class*="address"]',
-      '[class*="location"]',
-      'td.address',
-    ]) ?? '';
+    const addrText = this.firstText(card, ['.address', '[class*="address"]', '[class*="location"]', 'td.address']) ?? '';
     const city = (addrText || cardText).match(/([^\s　]+[市区町村])/)?.[1] ?? '';
 
-    // Images
     const imgSrcs = Array.from(card.querySelectorAll('img'))
       .map(img => img.getAttribute('src') ?? '')
       .filter(s => s.startsWith('http') && !s.match(/(?:logo|icon|sprite|blank|pixel)/i))
       .slice(0, 10);
 
     const thumbnailUrl = imgSrcs[0] ?? pageOgImage ?? null;
-
     const managementFee = this.extractMonthlyFee(cardText, '管理費');
     const repairFund = this.extractMonthlyFee(cardText, '修繕積立金');
     const direction = this.extractDirection(cardText);
@@ -281,7 +251,6 @@ export class ReinsScraper extends BaseScraper {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
 
-  /** Return text content of the first matching selector in a card element. */
   private firstText(card: Element, selectors: string[]): string | null {
     for (const sel of selectors) {
       const text = card.querySelector(sel)?.textContent?.trim();
@@ -290,14 +259,12 @@ export class ReinsScraper extends BaseScraper {
     return null;
   }
 
-  /** Build a stable site_property_id from a detail URL. */
   private idFromUrl(url: string): string {
     const m = url.match(/\/(\d{6,})\//);
     if (m) return m[1];
     return btoa(encodeURIComponent(url.replace(/https?:\/\/[^/]+/, ''))).slice(0, 24);
   }
 
-  /** Best-effort city extraction from a Japanese address string. */
   private cityFromAddress(addr: string): string | null {
     return addr.match(/([^\s　]+[市区町村])/)?.[1] ?? null;
   }
