@@ -5,6 +5,29 @@
 
 ---
 
+## 2026-04-19 (Desktop) — D1容量管理 + dedup高速化 + 画像補完 + Drive同期
+
+- **環境**: Desktop (Claude Code)
+- **ブランチ**: master
+- **コミット**: `fd1ee54`
+- **デプロイ**: 済 (Worker version `ea8fbe6e-3485-4fc2-ba86-dbd66fefa6eb`)
+
+### 変更内容
+- **migration 0005** (`migrations/0005_features_dedup.sql`): `property_features` 正式化 + `is_dedup_primary` 列追加 + インデックス作成
+- **D1適用済み**: `ALTER TABLE` / `CREATE INDEX idx_properties_dedup_pri` / `UPDATE` (重複94,557行を `is_dedup_primary=0` に設定)
+- **dedup高速化** (`src/db/queries.ts`): `hideDuplicates` デフォルト `true` 復帰。GROUP BY サブクエリ廃止 → `WHERE is_dedup_primary=1` インデックス参照で高速化
+- **画像・URL補完** (`src/routes/admin.ts`): `POST /api/admin/backfill-images` + `POST /api/admin/backfill-detail-urls` 追加
+- **容量監視** (`src/routes/admin.ts`): `GET /api/admin/d1-capacity` + `POST /api/admin/archive-cold` 追加
+- **D1 cron監視** (`src/index.tsx`): scheduled handler で毎回 D1 容量チェック (450MB超で `console.error`)
+- **Drive同期スクリプト** (`scripts/sync-r2-to-drive.sh` + `scripts/README-DRIVE-SYNC.md`): R2 archive/ → Google Drive rclone同期
+
+### 次のタスク
+- `POST /api/admin/archive-cold?limit=5000` で sold/delisted行をR2へアーカイブしD1容量削減
+- `POST /api/admin/backfill-images` で TERASS行に画像URL補完
+- D1現在: ~486MB / 500MB — archive-cold 実行推奨
+
+---
+
 ## 2026-04-19 15:10 (Desktop) — 統一UI + マイソク印刷 + 画像パイプライン
 
 - **環境**: Desktop (Claude Code)
