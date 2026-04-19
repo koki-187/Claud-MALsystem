@@ -57,7 +57,8 @@
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 5000);
-    console.log(`[TERASS-EXPORT] ダウンロード: ${filename} (${rows => rows}行)`);
+    const rowCount = Math.max(0, csvText.split('\n').length - 1); // 1行目はヘッダー
+    console.log(`[TERASS-EXPORT] ダウンロード: ${filename} (${rowCount}行)`);
   }
 
   // ===== IndexedDB を開く =====
@@ -225,6 +226,10 @@
   // 全 IndexedDB を列挙
   const dbNames = await listDatabases();
   console.log('[TERASS-EXPORT] 発見したDB:', dbNames);
+  if (dbNames.length === 0) {
+    console.warn('[TERASS-EXPORT] ⚠️ IndexedDB が空または indexedDB.databases() 未対応ブラウザ。Chrome/Edge で TERASS PICKS にログイン後、データを一度表示してから再実行してください。');
+    return { ok: false, reason: 'no_indexeddb' };
+  }
 
   // バケツ: { house_active, house_sold, mansion_active, mansion_sold, land_active, land_sold }
   const buckets = {

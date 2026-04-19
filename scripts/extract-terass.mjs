@@ -162,10 +162,10 @@ async function main() {
     // 8. IndexedDB エクスポートスクリプトを実行
     log('IndexedDB エクスポートスクリプトを実行中...');
     let evalResult;
+    let evalTimeoutHandle;
     try {
-      evalResult = await terassPage.evaluate(
-        new Function(`return (${extractScript})()`)  // IIFE を evaluate
-      );
+      // extractScript は IIFE 形式 — 文字列を直接 evaluate に渡すと eval 相当で実行される
+      evalResult = await terassPage.evaluate(extractScript);
     } catch (evalErr) {
       // evaluate がタイムアウトした場合でもダウンロードは完了している可能性がある
       warn(`スクリプト評価エラー (ダウンロードは継続される場合があります): ${evalErr.message}`);
@@ -175,24 +175,31 @@ async function main() {
       log(`スクリプト結果: ${JSON.stringify(evalResult)}`);
     }
 
-    // 9. ダウンロード完了を待機 (最大 DOWNLOAD_TIMEOUT_MS ms)
+    // 9. ダウンロード完了を待機 (最大 DOWNLOAD_TIMEOUT_MS ms) — clearTimeoutでleak防止
     log(`ダウンロード完了待機中 (最大 ${DOWNLOAD_TIMEOUT_MS / 1000}秒)...`);
-    const timeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('ダウンロードタイムアウト')), DOWNLOAD_TIMEOUT_MS)
-    );
+    let timeoutHandle;
+    const timeout = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(() => reject(new Error('ダウンロードタイムアウト')), DOWNLOAD_TIMEOUT_MS);
+    });
 
-    // 6ファイルのダウンロードを待つ、または 5秒経ってもダウンロードが来なければ完了とみなす
-    await Promise.race([
-      new Promise(resolve => setTimeout(resolve, 8000)), // 最低8秒待機
-      timeout,
-    ]);
-
-    // 残ダウンロードを待機
-    if (downloadPromises.length > 0) {
+    try {
+      // 6ファイルのダウンロードを待つ、または 8秒経ってもダウンロードが来なければ完了とみなす
       await Promise.race([
-        Promise.all(downloadPromises),
+        new Promise(resolve => setTimeout(resolve, 8000)),
         timeout,
-      ]).catch(e => warn(`一部ダウンロードが未完了: ${e.message}`));
+      ]);
+
+      // 残ダウンロードを待機
+      if (downloadPromises.length > 0) {
+        await Promise.race([
+          Promise.all(downloadPromises),
+          timeout,
+        ]).catch(e => warn(`一部ダウンロードが未完了: ${e.message}`));
+      } else {
+        warn('ダウンロードが1件も検出されませんでした。TERASS PICKSにログイン済みか、IndexedDBにデータが存在するか確認してください。');
+      }
+    } finally {
+      clearTimeout(timeoutHandle);
     }
 
     downloadContext.off('download', downloadHandler);
@@ -207,8 +214,10 @@ async function main() {
     };
 
   } finally {
-    // 既存ブラウザを終了させないよう disconnect のみ
-    browser.close().catch(() => {});
+    // CDP attach の場合は disconnect のみ — ブラウザプロセスは終了させない
+    try {
+      await browser.close();  // Playwright CDP では close() は内部的に disconnect 動作
+    } catch {}
   }
 
   // 10. terass_convert_and_import.mjs を実行

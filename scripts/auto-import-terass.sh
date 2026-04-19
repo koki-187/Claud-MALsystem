@@ -66,11 +66,13 @@ else
     echo "[auto-import] Chrome IndexedDB → CSV 抽出中..."
     echo "[auto-import] スクリプト: $EXTRACT_SCRIPT"
 
-    if node "$EXTRACT_SCRIPT" 2>&1 | tee -a "$LOG_FILE"; then
+    node "$EXTRACT_SCRIPT" 2>&1 | tee -a "$LOG_FILE"
+    # PIPESTATUS[0] は node の真の終了コード (tee の終了コードではない)
+    extract_code=${PIPESTATUS[0]}
+    if [ "$extract_code" -eq 0 ]; then
       echo "[auto-import] CSV抽出完了"
       extract_ok=1
     else
-      extract_code=$?
       echo "[auto-import] WARNING: 抽出スクリプトがコード ${extract_code} で失敗しました"
       echo "[auto-import]   既存CSVでのインポートに切り替えます (fallback)"
       extract_ok=0
