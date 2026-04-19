@@ -264,7 +264,8 @@ admin.post('/import', async (c) => {
       importedRows++;
     } catch (e) {
       errorRows++;
-      errors.push(`row ${i}: ${e instanceof Error ? e.message : String(e)}`);
+      console.error(`[admin/import] row ${i} error:`, e);
+      errors.push(`row ${i}: import failed`);
     }
   }
 
@@ -357,7 +358,8 @@ admin.post('/images/enqueue-all', async (c) => {
     const count = await enqueueAll(c.env);
     return c.json({ enqueued: count });
   } catch (e) {
-    return c.json({ error: String(e) }, 500);
+    console.error('[admin/images/enqueue-all] error:', e);
+    return c.json({ error: 'Internal error' }, 500);
   }
 });
 
@@ -368,7 +370,8 @@ admin.post('/images/process', async (c) => {
     const result = await processQueue(c.env, batchSize);
     return c.json(result);
   } catch (e) {
-    return c.json({ error: String(e) }, 500);
+    console.error('[admin/images/process] error:', e);
+    return c.json({ error: 'Internal error' }, 500);
   }
 });
 
@@ -396,8 +399,8 @@ admin.post('/scrape', async (c) => {
     const result = await runScheduledScrape(c.env);
     return c.json({ ok: true, ...result });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return c.json({ ok: false, error: msg }, 500);
+    console.error('[admin/scrape] error:', e);
+    return c.json({ ok: false, error: 'Internal error' }, 500);
   }
 });
 

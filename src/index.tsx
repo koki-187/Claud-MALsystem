@@ -19,12 +19,55 @@ app.use('*', logger());
 app.use('*', timing());
 app.use('*', secureHeaders());
 app.use('/api/*', cors({
-  origin: '*',
-  allowMethods: ['GET', 'POST', 'OPTIONS'],
+  origin: (origin) => {
+    // 本番Worker domain と localhost (開発) のみ許可
+    const allowed = [
+      'https://mal-search-system.navigator-187.workers.dev',
+      'http://localhost:8787',
+      'http://127.0.0.1:8787',
+    ];
+    return allowed.includes(origin) ? origin : allowed[0];
+  },
+  allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
   allowHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use('*', async (c, next) => {
   c.set('requestId', crypto.randomUUID());
+  await next();
+});
+
+// =====================
+// Rate Limiting (KV-based)
+// =====================
+async function checkRateLimit(
+  kv: KVNamespace,
+  key: string,
+  maxRequests: number,
+  windowSec: number,
+): Promise<boolean> {
+  const now = Math.floor(Date.now() / 1000);
+  const bucket = Math.floor(now / windowSec);
+  const kvKey = `rl:${key}:${bucket}`;
+  const raw = await kv.get(kvKey).catch(() => null);
+  const count = raw ? parseInt(raw) : 0;
+  if (count >= maxRequests) return false;
+  await kv.put(kvKey, String(count + 1), { expirationTtl: windowSec * 2 }).catch(() => {});
+  return true;
+}
+
+// 60 req/min per IP on /api/search
+app.use('/api/search', async (c, next) => {
+  const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
+  const allowed = await checkRateLimit(c.env.MAL_CACHE, `search:${ip}`, 60, 60);
+  if (!allowed) return c.json({ error: 'Too Many Requests' }, 429);
+  await next();
+});
+
+// 5 req/min per IP on /api/scrape/run
+app.use('/api/scrape/run', async (c, next) => {
+  const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
+  const allowed = await checkRateLimit(c.env.MAL_CACHE, `scrape:${ip}`, 5, 60);
+  if (!allowed) return c.json({ error: 'Too Many Requests' }, 429);
   await next();
 });
 
@@ -82,7 +125,8 @@ app.get('/api/search', async (c) => {
     logSearch(c.env.MAL_DB, params, result.total, result.executionTimeMs).catch(() => {});
     return c.json(result);
   } catch (error) {
-    return c.json({ error: 'Search failed', message: String(error) }, 500);
+    console.error('[/api/search] error:', error);
+    return c.json({ error: 'Search failed' }, 500);
   }
 });
 
@@ -93,7 +137,8 @@ app.get('/api/properties/:id', async (c) => {
     if (!property) return c.json({ error: 'Property not found' }, 404);
     return c.json(property);
   } catch (error) {
-    return c.json({ error: 'Failed to fetch property', message: String(error) }, 500);
+    console.error('[/api/properties/:id] error:', error);
+    return c.json({ error: 'Failed to fetch property' }, 500);
   }
 });
 
@@ -129,7 +174,8 @@ app.post('/api/scrape/run', async (c) => {
     const result = await runScheduledScrape(c.env);
     return c.json({ success: true, ...result });
   } catch (error) {
-    return c.json({ success: false, error: String(error) }, 500);
+    console.error('[/api/scrape/run] error:', error);
+    return c.json({ success: false, error: 'Internal error' }, 500);
   }
 });
 
@@ -176,8 +222,21 @@ app.get('/api/transactions', async (c) => {
 });
 
 // =====================
-// Admin Routes
+// Admin Routes (Bearer token認証必須)
 // =====================
+app.use('/api/admin/*', async (c, next) => {
+  const expected = c.env.ADMIN_SECRET;
+  if (!expected) {
+    return c.json({ error: 'Admin API disabled: ADMIN_SECRET not configured' }, 503);
+  }
+  const auth = c.req.header('Authorization') ?? '';
+  const provided = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  // 定数時間比較 (timing attack 緩和)
+  if (provided.length !== expected.length || provided !== expected) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+  await next();
+});
 app.route('/api/admin', adminRoutes);
 
 // =====================
@@ -1569,7 +1628,7 @@ function escHtml(s) {
 }
 function escAttr(s) {
   if (!s) return '#';
-  var safe = String(s).replace(/[<>"'\`]/g,function(c){return ({'"':'&quot;',"'":'&#39;','<':'&lt;','>':'&gt;','\`':'&#96;'})[c]||c;});
+  var safe = String(s).replace(/&/g,'&amp;').replace(/[<>"'\`]/g,function(c){return ({'"':'&quot;',"'":'&#39;','<':'&lt;','>':'&gt;','\`':'&#96;'})[c]||c;});
   return (/^https?:\\/\\//i.test(safe) || safe.startsWith('/') || safe === '#') ? safe : '#';
 }
 

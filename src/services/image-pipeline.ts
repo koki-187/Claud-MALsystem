@@ -17,6 +17,37 @@ async function buildR2Key(propertyId: string, imageUrl: string): Promise<string>
   return `images/${propertyId}/${hash}.jpg`;
 }
 
+/**
+ * SSRF defense: validate URL is HTTPS, on a known image-host allowlist,
+ * and not pointing to a private/loopback address.
+ * Returns true if the URL is safe to fetch.
+ */
+const ALLOWED_IMAGE_HOSTS = [
+  'suumo.jp', 'img.suumo.jp', 'www.suumo.jp',
+  'homes.co.jp', 'www.homes.co.jp', 'imgs.homes.co.jp',
+  'athome.co.jp', 'www.athome.co.jp', 'image.athome.co.jp', 'image1.athome.co.jp', 'image2.athome.co.jp',
+  'fudosan.co.jp', 'www.fudosan.co.jp',
+  'chintai.net', 'www.chintai.net',
+  'sumaity.com', 'img.sumaity.com',
+  'reins.or.jp', 'www.reins.or.jp',
+  'kenbiya.com', 'www.kenbiya.com', 'img.kenbiya.com',
+  'rakumachi.jp', 'www.rakumachi.jp', 'img.rakumachi.jp',
+];
+
+function isUrlSafeToFetch(url: string): boolean {
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
+  // Block private/loopback/link-local addresses (IPv4 + common cases)
+  const host = u.hostname.toLowerCase();
+  if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0') return false;
+  if (/^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)) return false;
+  if (host === '169.254.169.254') return false; // cloud metadata
+  if (host.endsWith('.internal') || host.endsWith('.local')) return false;
+  // Allowlist match (exact or subdomain)
+  return ALLOWED_IMAGE_HOSTS.some(allowed => host === allowed || host.endsWith('.' + allowed));
+}
+
 // ─── enqueueImage ─────────────────────────────────────────────────────────────
 
 /**
@@ -75,6 +106,11 @@ export async function processQueue(
       await env.MAL_DB.prepare(`
         UPDATE download_queue SET status = 'processing' WHERE id = ?
       `).bind(item.id).run();
+
+      // SSRF defense: validate URL before fetching
+      if (!isUrlSafeToFetch(item.source_url)) {
+        throw new Error(`Blocked unsafe URL (SSRF guard): ${item.source_url}`);
+      }
 
       // Fetch image (10s timeout)
       const resp = await fetch(item.source_url, { signal: AbortSignal.timeout(10_000) });
