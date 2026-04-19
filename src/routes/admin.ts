@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Bindings } from '../types';
 import type { AdminStats, SiteId, PrefectureCode } from '../types';
+import { enqueueAll, processQueue } from '../services/image-pipeline';
 
 const admin = new Hono<{ Bindings: Bindings }>();
 
@@ -345,6 +346,44 @@ async function processDownloadItem(item: Record<string, unknown>, env: Bindings)
     `).bind(String(e), item.id as string).run();
   }
 }
+
+// ─── POST /api/admin/images/enqueue-all ──────────────────────────────────────
+admin.post('/images/enqueue-all', async (c) => {
+  try {
+    const count = await enqueueAll(c.env);
+    return c.json({ enqueued: count });
+  } catch (e) {
+    return c.json({ error: String(e) }, 500);
+  }
+});
+
+// ─── POST /api/admin/images/process ──────────────────────────────────────────
+admin.post('/images/process', async (c) => {
+  const batchSize = Math.min(parseInt(c.req.query('batch') ?? '10'), 50);
+  try {
+    const result = await processQueue(c.env, batchSize);
+    return c.json(result);
+  } catch (e) {
+    return c.json({ error: String(e) }, 500);
+  }
+});
+
+// ─── GET /api/admin/images/queue-status ──────────────────────────────────────
+admin.get('/images/queue-status', async (c) => {
+  const rows = await safeAll<{ status: string; cnt: number }>(
+    c.env.MAL_DB.prepare(`
+      SELECT status, COUNT(*) as cnt
+      FROM download_queue
+      WHERE asset_type = 'image'
+      GROUP BY status
+    `)
+  );
+  const counts: Record<string, number> = {};
+  for (const r of rows.results ?? []) {
+    counts[r.status] = r.cnt;
+  }
+  return c.json({ counts });
+});
 
 // ─── DELETE /api/admin/sold-cleanup ──────────────────────────────────────────
 admin.delete('/sold-cleanup', async (c) => {

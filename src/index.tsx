@@ -8,6 +8,7 @@ import { searchProperties, getPropertyById, getStats, logSearch } from './db/que
 import { aggregateSearch, runScheduledScrape } from './scrapers/aggregator';
 import { PREFECTURES, SITES } from './types';
 import { admin as adminRoutes } from './routes/admin';
+import { processQueue } from './services/image-pipeline';
 
 const app = new Hono<{ Bindings: Bindings; Variables: AppVariables }>();
 
@@ -200,6 +201,8 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
   } else {
     ctx.waitUntil(runScheduledScrape(env));
   }
+  // 毎時: 画像キューを最大50件処理
+  ctx.waitUntil(processQueue(env, 50).catch(console.error));
 };
 
 export default { fetch: app.fetch, scheduled };
