@@ -93,6 +93,7 @@ app.get('/api/search', async (c) => {
     stationMinutes: q.station_min ? parseInt(q.station_min) : undefined,
     yieldMin: q.yield_min ? parseFloat(q.yield_min) : undefined,
     sites: q.sites ? (q.sites.split(',') as any) : undefined,
+    hideDuplicates: q.hide_duplicates === '1' ? true : (q.hide_duplicates === '0' ? false : undefined),
     sortBy: q.sort as any,
     page: q.page ? parseInt(q.page) : 1,
     limit: q.limit ? parseInt(q.limit) : 18,

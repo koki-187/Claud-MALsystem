@@ -74,12 +74,9 @@ export async function searchProperties(
     const q = `%${params.query}%`;
     bindings.push(q, q, q);
   }
-  if (params.hideDuplicates ?? true) {
-    // Dedup: for each fingerprint group, keep the row with MIN(id).
-    // When a sites filter is active, restrict MIN() to those sites so
-    // cross-site fingerprint matches (e.g. terass_reins vs athome) don't
-    // silently exclude the requested sites via lexicographic MIN.
-    // SiteId values are TypeScript-typed constants so inline is safe.
+  // hideDuplicates: default false — the full-table subquery on 750k+ rows times out in Workers.
+  // Opt-in via hide_duplicates=1; when a site filter is active dedup is scoped to those sites.
+  if (params.hideDuplicates === true) {
     const siteRestrict = params.sites && params.sites.length > 0
       ? `AND site_id IN (${params.sites.map(s => `'${s}'`).join(', ')})`
       : '';
