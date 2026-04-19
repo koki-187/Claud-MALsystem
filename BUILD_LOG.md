@@ -312,3 +312,26 @@
   1. HOME'S以外8サイトのCSSセレクタを実HTML検証で調整 (各サイト数時間)
   2. 容量さらに必要なら sold_at < 2024 を段階削除
   3. Phase 1 (TERASS Chrome拡張動作確認) — 別セッション推奨
+
+---
+
+## 2026-04-19 (Desktop) — セキュリティレビュー対応 Phase 1+2完了
+- **環境**: Desktop (Claude Code)
+- **ブランチ**: master
+- **コミット**: `6efd29c`
+- **変更内容**: セキュリティレビュー対応 — admin Bearer認証 / CORS allowlist / SSRF防御 / XSS escAttr修正 / error sanitization / KV rate limit
+  - admin API Bearer token認証 (`ADMIN_SECRET`) — 既実装分含む
+  - CORS origin allowlist化 — 既実装分含む
+  - `src/services/image-pipeline.ts`: SSRF防御 (URL allowlist + private IP block) — 既実装分含む
+  - `src/index.tsx`: escAttr()で`&`encode追加 (XSS bypass防止) — 既実装分含む
+  - `src/index.tsx`: error message sanitization — `String(error)` 漏洩を `console.error` + generic messageに置換
+  - `src/routes/admin.ts`: error message sanitization — 全catchブロック統一
+  - `src/index.tsx`: KV-basedレートリミット追加 — `/api/search` 60req/min, `/api/scrape/run` 5req/min、IP別KVカウンター
+  - 5サイト本番稼働中 (HOMES, AtHome, kenbiya, rakumachi, chintai)
+- **デプロイ**: 済 (Worker version: `6cf72f5a-b8a2-4751-af8e-9ededf04ace6`)
+- **ADMIN_SECRET**: 自動生成・設定済 (CF Dashboardで確認可能)
+- **検証**:
+  - `GET /api/admin/stats` → 401 ✅
+  - `GET /api/stats` → 200 + 742,412件 ✅
+  - `GET /api/health` → 200 ✅
+- **次のタスク**: 残り4サイト調査 (suumo cookie, fudosan DNS, reins MLS会員制, smaity SPA)
