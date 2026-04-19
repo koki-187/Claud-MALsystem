@@ -1,6 +1,11 @@
 import { BaseScraper } from './base';
 import type { Property, PrefectureCode } from '../types';
 import type { ScrapeContext } from './base';
+import {
+  parseDocument,
+  extractJsonLd,
+  findJsonLdByType,
+} from '../parsers/html-parser';
 
 export class ReinsScraper extends BaseScraper {
   constructor() {
@@ -8,128 +13,292 @@ export class ReinsScraper extends BaseScraper {
   }
 
   async scrapeListings(ctx: ScrapeContext): Promise<Property[]> {
-    // REINS (Real Estate Information Network System) - 不動産流通機構
-    const url = `https://www.reins.or.jp/search/?prefecture=${ctx.prefecture}&page=${ctx.page ?? 1}`;
+    const page = ctx.page ?? 1;
+    // REINS (不動産流通機構) 物件検索 URL
+    const url = `https://www.reins.or.jp/search/?prefecture=${ctx.prefecture}&page=${page}`;
 
     const html = await this.fetchHtml(url);
-    if (html) {
-      const parsed = this.parseListings(html, ctx.prefecture);
-      if (parsed.length > 0) return parsed;
-    }
-    return this.getMockData(ctx.prefecture);
+    if (!html) return [];
+
+    return this.parseListings(html, ctx.prefecture);
   }
 
   private parseListings(html: string, prefecture: PrefectureCode): Property[] {
+    // --- Pass 1: JSON-LD structured data (most reliable when present) ---
+    const jsonLdResults = this.parseFromJsonLd(html, prefecture);
+    if (jsonLdResults.length > 0) return jsonLdResults;
+
+    // --- Pass 2: CSS selector DOM parsing ---
+    return this.parseFromDom(html, prefecture);
+  }
+
+  // ── JSON-LD pass ──────────────────────────────────────────────────────────
+
+  private parseFromJsonLd(html: string, prefecture: PrefectureCode): Property[] {
+    const doc = parseDocument(html);
+    if (!doc) return [];
+
+    const items = extractJsonLd(doc);
+    const nodes = findJsonLdByType(
+      items,
+      'RealEstateListing',
+      'Product',
+      'Apartment',
+      'House',
+      'SingleFamilyResidence',
+    );
+    if (nodes.length === 0) return [];
+
     const properties: Property[] = [];
-    const cardRegex = /<tr[^>]+class="[^"]*bukken-row[^"]*"[^>]*>([\s\S]*?)<\/tr>/g;
-    let match;
-    let count = 0;
-
-    while ((match = cardRegex.exec(html)) !== null && count < 15) {
+    for (const node of nodes) {
       try {
-        const row = match[1];
-        const titleMatch = row.match(/<td[^>]*class="[^"]*name[^"]*"[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/);
-        const priceMatch = row.match(/(\d[,\d]*万円)/);
-        const areaMatch  = row.match(/(\d+(?:\.\d+)?)\s*㎡/);
-        const roomsMatch = row.match(/([1-9][LDKSR]+)/);
+        const partial = this.jsonLdNodeToPartial(node);
+        if (!partial.title || !partial.detailUrl) continue;
 
-        if (!titleMatch) continue;
-
-        const detailUrl = titleMatch[1].startsWith('http') ? titleMatch[1] : `https://www.reins.or.jp${titleMatch[1]}`;
-        const title = titleMatch[2].trim();
-        const { price, priceText } = this.extractPrice(priceMatch?.[1] ?? '');
-        const area = areaMatch ? parseFloat(areaMatch[1]) : null;
-        const { station, stationMinutes } = this.extractStation(row);
-        const sitePropertyId = `reins_${btoa(encodeURIComponent(detailUrl)).slice(0, 18)}`;
-        const city = row.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
-
-        const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms: roomsMatch?.[1] ?? null });
+        const sitePropertyId = this.idFromUrl(partial.detailUrl);
+        const city = partial.city ?? this.cityFromAddress(partial.address ?? '') ?? '';
+        const fingerprint = this.computeFingerprint({
+          prefecture,
+          city,
+          price: partial.price ?? null,
+          area: partial.area ?? null,
+          rooms: partial.rooms ?? null,
+        });
 
         properties.push(this.buildBaseProperty({
           sitePropertyId,
-          title,
-          propertyType: 'mansion',
+          title: partial.title,
+          propertyType: partial.propertyType ?? 'mansion',
           prefecture,
           city,
-          detailUrl,
-          price,
-          priceText,
-          area,
-          rooms: roomsMatch?.[1] ?? null,
-          station,
-          stationMinutes,
-          managementFee: this.extractMonthlyFee(row, '管理費'),
-          repairFund: this.extractMonthlyFee(row, '修繕積立金'),
-          direction: this.extractDirection(row),
-          structure: this.extractStructure(row),
-          floorPlanUrl: this.extractFloorPlanUrl(row),
-          exteriorUrl: this.extractExteriorUrl(row),
+          detailUrl: partial.detailUrl,
+          ...partial,
           fingerprint,
         }));
-        count++;
+      } catch { continue; }
+    }
+    return properties;
+  }
+
+  /** Convert a JSON-LD node into a partial Property. */
+  private jsonLdNodeToPartial(node: Record<string, unknown>): Partial<Property> & { city?: string } {
+    const partial: Partial<Property> & { city?: string } = {};
+
+    if (typeof node['name'] === 'string') partial.title = node['name'].trim();
+    if (typeof node['description'] === 'string') partial.description = node['description'].trim();
+    if (typeof node['url'] === 'string') partial.detailUrl = node['url'];
+
+    // Offer / price
+    const offer = node['offers'];
+    if (offer && typeof offer === 'object' && !Array.isArray(offer)) {
+      const o = offer as Record<string, unknown>;
+      const rawPrice = o['price'];
+      if (rawPrice !== undefined) {
+        const p = parseFloat(String(rawPrice));
+        if (!isNaN(p)) {
+          partial.price = p >= 100000 ? Math.round(p / 10000) : p;
+          partial.priceText = `${partial.price.toLocaleString()}万円`;
+        }
+      }
+    }
+
+    // Floor size
+    const floorSize = node['floorSize'];
+    if (floorSize && typeof floorSize === 'object' && !Array.isArray(floorSize)) {
+      const fs = floorSize as Record<string, unknown>;
+      const val = parseFloat(String(fs['value'] ?? ''));
+      if (!isNaN(val)) partial.area = val;
+    }
+
+    // Geo
+    const geo = node['geo'];
+    if (geo && typeof geo === 'object' && !Array.isArray(geo)) {
+      const g = geo as Record<string, unknown>;
+      if (typeof g['latitude'] === 'number') partial.latitude = g['latitude'];
+      if (typeof g['longitude'] === 'number') partial.longitude = g['longitude'];
+    }
+
+    // Images
+    const img = node['image'];
+    if (typeof img === 'string') {
+      partial.thumbnailUrl = img;
+      partial.images = [img];
+    } else if (Array.isArray(img) && img.length > 0) {
+      partial.thumbnailUrl = String(img[0]);
+      partial.images = img.slice(0, 10).map(String);
+    }
+
+    // Address
+    const addr = node['address'];
+    if (addr && typeof addr === 'object' && !Array.isArray(addr)) {
+      const a = addr as Record<string, unknown>;
+      const streetAddress = typeof a['streetAddress'] === 'string' ? a['streetAddress'] : '';
+      const locality = typeof a['addressLocality'] === 'string' ? a['addressLocality'] : '';
+      partial.address = [locality, streetAddress].filter(Boolean).join(' ') || null;
+      partial.city = locality || undefined;
+    } else if (typeof addr === 'string') {
+      partial.address = addr;
+      partial.city = this.cityFromAddress(addr) ?? undefined;
+    }
+
+    return partial;
+  }
+
+  // ── CSS selector DOM pass ─────────────────────────────────────────────────
+
+  private parseFromDom(html: string, prefecture: PrefectureCode): Property[] {
+    const doc = parseDocument(html);
+    if (!doc) return [];
+
+    // og:image for thumbnail fallback
+    const ogImage = doc.querySelector('meta[property="og:image"]')?.getAttribute('content') ?? null;
+
+    const properties: Property[] = [];
+
+    // REINS 一覧ページのカードセレクタ候補
+    const cardSelectors = [
+      '.bukken-row',            // 主セレクタ
+      'tr.bukken-row',          // テーブル行スタイル
+      '.property-item',         // 汎用カード
+      '[data-property-id]',     // data属性ベース
+      '.cassette_inner',        // 汎用フォールバック
+    ];
+
+    let cards: Element[] = [];
+    for (const sel of cardSelectors) {
+      const found = Array.from(doc.querySelectorAll(sel));
+      if (found.length > 0) { cards = found; break; }
+    }
+
+    if (cards.length === 0) return [];
+
+    for (const card of cards.slice(0, 20)) {
+      try {
+        const prop = this.cardToProperty(card, ogImage, prefecture);
+        if (prop) properties.push(prop);
       } catch { continue; }
     }
 
     return properties;
   }
 
-  private getMockData(prefecture: PrefectureCode): Property[] {
-    const mockProperties = [
-      {
-        title: '北海道旭川市 中古一戸建て 4LDK 土地200m²',
-        price: 1800, area: 120.0, landArea: 200.0, rooms: '4LDK', age: 30,
-        city: '旭川市', station: '旭川', stationMinutes: 20,
-        lat: 43.7706, lng: 142.3650, type: 'kodate' as const,
-      },
-      {
-        title: '沖縄県那覇市 マンション 3LDK 新築 海近',
-        price: 4200, area: 78.5, landArea: null, rooms: '3LDK', age: 0,
-        city: '那覇市', station: '旭橋', stationMinutes: 10,
-        lat: 26.2124, lng: 127.6809, type: 'mansion' as const,
-      },
-      {
-        title: '鹿児島市 土地 150m² 建築条件なし 桜島ビュー',
-        price: 1500, area: null, landArea: 150.0, rooms: null, age: null,
-        city: '鹿児島市', station: '天文館通', stationMinutes: 15,
-        lat: 31.5966, lng: 130.5571, type: 'tochi' as const,
-      },
-    ];
+  private cardToProperty(
+    card: Element,
+    pageOgImage: string | null,
+    prefecture: PrefectureCode,
+  ): Property | null {
+    // Title & detail URL
+    const linkEl =
+      card.querySelector('.property-name a') ??
+      card.querySelector('.bukken-name a') ??
+      card.querySelector('td.name a') ??
+      card.querySelector('h2 a') ??
+      card.querySelector('h3 a') ??
+      card.querySelector('a[href*="/bukken/"]') ??
+      card.querySelector('a[href*="/property/"]') ??
+      card.querySelector('a');
 
-    return mockProperties.map((m, i) => {
-      const fingerprint = this.computeFingerprint({ prefecture, city: m.city, price: m.price, area: m.area ?? null, rooms: m.rooms });
-      return this.buildBaseProperty({
-        sitePropertyId: `mock_${prefecture}_reins_${i}`,
-        title: m.title,
-        propertyType: m.type,
-        prefecture,
-        city: m.city,
-        detailUrl: `https://www.reins.or.jp/search/?prefecture=${prefecture}`,
-        price: m.price,
-        priceText: `${m.price.toLocaleString()}万円`,
-        area: m.area ?? null,
-        buildingArea: m.area ?? null,
-        landArea: m.landArea ?? null,
-        rooms: m.rooms,
-        age: m.age,
-        floor: m.type === 'mansion' ? 4 + i * 3 : null,
-        totalFloors: m.type === 'mansion' ? 20 : null,
-        station: m.station,
-        stationMinutes: m.stationMinutes,
-        description: `REINS掲載物件。${m.city}エリア。信頼性の高い不動産流通機構の登録物件。`,
-        features: m.type === 'tochi'   ? ['建築条件なし', '更地渡し', '即引渡可'] :
-                  m.type === 'kodate'  ? ['駐車場2台', '収納充実', '閑静な住宅地'] :
-                                         ['新築', '免震構造', '24時間管理'],
-        latitude:  m.lat + (i - 1) * 0.01,
-        longitude: m.lng + (i - 1) * 0.01,
-        fingerprint,
-        managementFee: null,
-        repairFund: null,
-        direction: null,
-        structure: null,
-        floorPlanUrl: null,
-        exteriorUrl: null,
-        lastSeenAt: null,
-      });
+    const href = linkEl?.getAttribute('href') ?? '';
+    const titleText = linkEl?.textContent?.trim() ?? '';
+    if (!titleText) return null;
+
+    const detailUrl = href.startsWith('http') ? href : `https://www.reins.or.jp${href}`;
+    const sitePropertyId = this.idFromUrl(detailUrl);
+
+    // Price
+    const priceText = this.firstText(card, [
+      '.price',
+      '[class*="price"]',
+      'td.price',
+    ]) ?? '';
+    const { price, priceText: priceLabel } = this.extractPrice(priceText);
+
+    // Area
+    const areaText = this.firstText(card, [
+      '.area',
+      '[class*="area"]',
+      'td.area',
+    ]) ?? card.textContent ?? '';
+    const area = this.extractArea(areaText);
+
+    // Rooms
+    const cardText = card.textContent ?? '';
+    const rooms = cardText.match(/([1-9][LDKSR]+)/)?.[1] ?? null;
+
+    // Station
+    const { station, stationMinutes } = this.extractStation(cardText);
+
+    // Age
+    const age = this.extractAge(cardText);
+
+    // City / address
+    const addrText = this.firstText(card, [
+      '.address',
+      '[class*="address"]',
+      '[class*="location"]',
+      'td.address',
+    ]) ?? '';
+    const city = (addrText || cardText).match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+
+    // Images
+    const imgSrcs = Array.from(card.querySelectorAll('img'))
+      .map(img => img.getAttribute('src') ?? '')
+      .filter(s => s.startsWith('http') && !s.match(/(?:logo|icon|sprite|blank|pixel)/i))
+      .slice(0, 10);
+
+    const thumbnailUrl = imgSrcs[0] ?? pageOgImage ?? null;
+
+    const managementFee = this.extractMonthlyFee(cardText, '管理費');
+    const repairFund = this.extractMonthlyFee(cardText, '修繕積立金');
+    const direction = this.extractDirection(cardText);
+    const structure = this.extractStructure(cardText);
+
+    const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms });
+
+    return this.buildBaseProperty({
+      sitePropertyId,
+      title: titleText,
+      propertyType: 'mansion',
+      prefecture,
+      city,
+      detailUrl,
+      price,
+      priceText: priceLabel || priceText,
+      area,
+      rooms,
+      age,
+      station,
+      stationMinutes,
+      thumbnailUrl,
+      images: imgSrcs,
+      managementFee,
+      repairFund,
+      direction,
+      structure,
+      fingerprint,
     });
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  /** Return text content of the first matching selector in a card element. */
+  private firstText(card: Element, selectors: string[]): string | null {
+    for (const sel of selectors) {
+      const text = card.querySelector(sel)?.textContent?.trim();
+      if (text) return text;
+    }
+    return null;
+  }
+
+  /** Build a stable site_property_id from a detail URL. */
+  private idFromUrl(url: string): string {
+    const m = url.match(/\/(\d{6,})\//);
+    if (m) return m[1];
+    return btoa(encodeURIComponent(url.replace(/https?:\/\/[^/]+/, ''))).slice(0, 24);
+  }
+
+  /** Best-effort city extraction from a Japanese address string. */
+  private cityFromAddress(addr: string): string | null {
+    return addr.match(/([^\s　]+[市区町村])/)?.[1] ?? null;
   }
 }

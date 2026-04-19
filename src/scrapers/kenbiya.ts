@@ -1,6 +1,11 @@
 import { BaseScraper } from './base';
 import type { Property, PrefectureCode } from '../types';
 import type { ScrapeContext } from './base';
+import {
+  parseDocument,
+  extractJsonLd,
+  findJsonLdByType,
+} from '../parsers/html-parser';
 
 export class KenbiyaScraper extends BaseScraper {
   constructor() {
@@ -8,80 +13,68 @@ export class KenbiyaScraper extends BaseScraper {
   }
 
   async scrapeListings(ctx: ScrapeContext): Promise<Property[]> {
-    const { prefecture, maxResults = 15 } = ctx;
-    const prefNum = parseInt(prefecture);
-    // 健美家URL例: /ar/0013/ (東京)
+    const page = ctx.page ?? 1;
+    const prefNum = parseInt(ctx.prefecture);
+    // 健美家 収益物件一覧 URL例: /list/ik/tokyo/ or /ar/0013/
     const prefStr = String(prefNum).padStart(4, '0');
-    const url = `https://www.kenbiya.com/ar/${prefStr}/`;
+    const url = `https://www.kenbiya.com/ar/${prefStr}/?pg=${page}`;
 
     const html = await this.fetchHtml(url);
-    if (html) {
-      const properties = this.parseKenbiya(html, prefecture, maxResults);
-      if (properties.length > 0) return properties;
-    }
-    return this.getMockData(prefecture);
+    if (!html) return [];
+
+    return this.parseListings(html, ctx.prefecture);
   }
 
-  private parseKenbiya(html: string, prefecture: PrefectureCode, maxResults: number): Property[] {
+  private parseListings(html: string, prefecture: PrefectureCode): Property[] {
+    // --- Pass 1: JSON-LD structured data (most reliable when present) ---
+    const jsonLdResults = this.parseFromJsonLd(html, prefecture);
+    if (jsonLdResults.length > 0) return jsonLdResults;
+
+    // --- Pass 2: CSS selector DOM parsing ---
+    return this.parseFromDom(html, prefecture);
+  }
+
+  // ── JSON-LD pass ──────────────────────────────────────────────────────────
+
+  private parseFromJsonLd(html: string, prefecture: PrefectureCode): Property[] {
+    const doc = parseDocument(html);
+    if (!doc) return [];
+
+    const items = extractJsonLd(doc);
+    const nodes = findJsonLdByType(
+      items,
+      'RealEstateListing',
+      'Product',
+      'Apartment',
+      'House',
+      'SingleFamilyResidence',
+    );
+    if (nodes.length === 0) return [];
+
     const properties: Property[] = [];
-    const itemPattern = /<div[^>]+class="[^"]*bukken[^"]*"[^>]*>([\s\S]*?)<\/div>\s*<\/div>/gi;
-    const titlePattern = /<h3[^>]*><a[^>]*>([^<]+)<\/a>/i;
-    const pricePattern = /([0-9,]+)\s*万円/;
-    const areaPattern = /([0-9.]+)\s*(?:m²|㎡)/;
-    const linkPattern = /href="([^"]+bukken[^"]+)"/i;
-    const yieldPattern = /([0-9.]+)\s*%/;
-    const annualIncomePattern = /([0-9,]+)万円\/年/;
-
-    let match;
-    while ((match = itemPattern.exec(html)) !== null && properties.length < maxResults) {
+    for (const node of nodes) {
       try {
-        const chunk = match[1];
-        const titleM = titlePattern.exec(chunk);
-        const priceM  = pricePattern.exec(chunk);
-        const areaM   = areaPattern.exec(chunk);
-        const linkM   = linkPattern.exec(chunk);
-        const yieldM  = yieldPattern.exec(chunk);
-        const annualM = annualIncomePattern.exec(chunk);
+        const partial = this.jsonLdNodeToPartial(node);
+        if (!partial.title || !partial.detailUrl) continue;
 
-        if (!titleM || !linkM) continue;
-
-        const detailUrl = linkM[1].startsWith('http')
-          ? linkM[1]
-          : `https://www.kenbiya.com${linkM[1]}`;
-        const sitePropertyId = `kenbiya_${btoa(encodeURIComponent(detailUrl)).slice(0, 20)}`;
-        const price = priceM ? parseInt(priceM[1].replace(/,/g, '')) : null;
-        const area  = areaM  ? parseFloat(areaM[1]) : null;
-        const city = chunk.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
-        const yieldRate = yieldM ? parseFloat(yieldM[1]) : null;
-
-        // 想定年収を description に追記
-        let descriptionExtra = '';
-        if (annualM) {
-          descriptionExtra = ` 想定年収：${annualM[1]}万円/年`;
-        }
-
-        const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms: null });
+        const sitePropertyId = this.idFromUrl(partial.detailUrl);
+        const city = partial.city ?? this.cityFromAddress(partial.address ?? '') ?? '';
+        const fingerprint = this.computeFingerprint({
+          prefecture,
+          city,
+          price: partial.price ?? null,
+          area: partial.area ?? null,
+          rooms: partial.rooms ?? null,
+        });
 
         properties.push(this.buildBaseProperty({
           sitePropertyId,
-          title: titleM[1].trim(),
+          title: partial.title,
           propertyType: 'investment',
           prefecture,
           city,
-          detailUrl,
-          price,
-          priceText: priceM ? `${priceM[1]}万円` : '価格要相談',
-          area,
-          yieldRate,
-          description: descriptionExtra || null,
-          thumbnailUrl: this.extractThumbnail(chunk),
-          images: this.extractImages(chunk),
-          managementFee: this.extractMonthlyFee(chunk, '管理費'),
-          repairFund: this.extractMonthlyFee(chunk, '修繕積立金'),
-          direction: this.extractDirection(chunk),
-          structure: this.extractStructure(chunk),
-          floorPlanUrl: this.extractFloorPlanUrl(chunk),
-          exteriorUrl: this.extractExteriorUrl(chunk),
+          detailUrl: partial.detailUrl,
+          ...partial,
           fingerprint,
         }));
       } catch { continue; }
@@ -89,44 +82,264 @@ export class KenbiyaScraper extends BaseScraper {
     return properties;
   }
 
-  private getMockData(prefecture: PrefectureCode): Property[] {
-    const mockProperties = [
-      { title: '【健美家】東京都 一棟アパート 利回り8.5%',   price: 8500,  area: 220, rooms: '8室',  age: 12, city: '墨田区',      station: '錦糸町', stationMinutes: 8,  lat: 35.698, lng: 139.814, yieldRate: 8.5  },
-      { title: '【健美家】大阪府 区分マンション 利回り9.2%', price: 1200,  area:  32, rooms: '1K',   age: 18, city: '大阪市北区',   station: '梅田',   stationMinutes: 5,  lat: 34.702, lng: 135.496, yieldRate: 9.2  },
-      { title: '【健美家】神奈川 一棟マンション 利回り7.8%', price: 15000, area: 580, rooms: '12室', age: 22, city: '横浜市中区',   station: '関内',   stationMinutes: 6,  lat: 35.444, lng: 139.641, yieldRate: 7.8  },
+  /** Convert a JSON-LD node into a partial Property (with yieldRate extraction). */
+  private jsonLdNodeToPartial(node: Record<string, unknown>): Partial<Property> & { city?: string } {
+    const partial: Partial<Property> & { city?: string } = {};
+
+    if (typeof node['name'] === 'string') partial.title = node['name'].trim();
+    if (typeof node['description'] === 'string') partial.description = node['description'].trim();
+    if (typeof node['url'] === 'string') partial.detailUrl = node['url'];
+
+    // Offer / price
+    const offer = node['offers'];
+    if (offer && typeof offer === 'object' && !Array.isArray(offer)) {
+      const o = offer as Record<string, unknown>;
+      const rawPrice = o['price'];
+      if (rawPrice !== undefined) {
+        const p = parseFloat(String(rawPrice));
+        if (!isNaN(p)) {
+          partial.price = p >= 100000 ? Math.round(p / 10000) : p;
+          partial.priceText = `${partial.price.toLocaleString()}万円`;
+        }
+      }
+    }
+
+    // Floor size
+    const floorSize = node['floorSize'];
+    if (floorSize && typeof floorSize === 'object' && !Array.isArray(floorSize)) {
+      const fs = floorSize as Record<string, unknown>;
+      const val = parseFloat(String(fs['value'] ?? ''));
+      if (!isNaN(val)) partial.area = val;
+    }
+
+    // Geo
+    const geo = node['geo'];
+    if (geo && typeof geo === 'object' && !Array.isArray(geo)) {
+      const g = geo as Record<string, unknown>;
+      if (typeof g['latitude'] === 'number') partial.latitude = g['latitude'];
+      if (typeof g['longitude'] === 'number') partial.longitude = g['longitude'];
+    }
+
+    // Images
+    const img = node['image'];
+    if (typeof img === 'string') {
+      partial.thumbnailUrl = img;
+      partial.images = [img];
+    } else if (Array.isArray(img) && img.length > 0) {
+      partial.thumbnailUrl = String(img[0]);
+      partial.images = img.slice(0, 10).map(String);
+    }
+
+    // Address
+    const addr = node['address'];
+    if (addr && typeof addr === 'object' && !Array.isArray(addr)) {
+      const a = addr as Record<string, unknown>;
+      const streetAddress = typeof a['streetAddress'] === 'string' ? a['streetAddress'] : '';
+      const locality = typeof a['addressLocality'] === 'string' ? a['addressLocality'] : '';
+      partial.address = [locality, streetAddress].filter(Boolean).join(' ') || null;
+      partial.city = locality || undefined;
+    } else if (typeof addr === 'string') {
+      partial.address = addr;
+      partial.city = this.cityFromAddress(addr) ?? undefined;
+    }
+
+    // 利回り (yieldRate) — JSON-LD additionalProperty or description fallback
+    const additionalProp = node['additionalProperty'];
+    if (Array.isArray(additionalProp)) {
+      for (const p of additionalProp) {
+        if (p && typeof p === 'object') {
+          const prop = p as Record<string, unknown>;
+          if (
+            typeof prop['name'] === 'string' &&
+            /利回り|yield/i.test(prop['name'])
+          ) {
+            const val = parseFloat(String(prop['value'] ?? ''));
+            if (!isNaN(val)) partial.yieldRate = val;
+          }
+        }
+      }
+    }
+    // Fallback: extract from description or name
+    if (partial.yieldRate == null && partial.title) {
+      partial.yieldRate = this.extractYieldRate(partial.title);
+    }
+    if (partial.yieldRate == null && partial.description) {
+      partial.yieldRate = this.extractYieldRate(partial.description);
+    }
+
+    return partial;
+  }
+
+  // ── CSS selector DOM pass ─────────────────────────────────────────────────
+
+  private parseFromDom(html: string, prefecture: PrefectureCode): Property[] {
+    const doc = parseDocument(html);
+    if (!doc) return [];
+
+    // og:image for thumbnail fallback
+    const ogImage = doc.querySelector('meta[property="og:image"]')?.getAttribute('content') ?? null;
+
+    const properties: Property[] = [];
+
+    // 健美家 一覧ページのカードセレクタ候補
+    const cardSelectors = [
+      '.bukken',                // 主セレクタ
+      '.property-item',         // 汎用
+      '.cassette_inner',        // フォールバック
+      '[data-property-id]',     // data属性ベース
+      '.kenbiya-item',          // 旧スタイル
     ];
 
-    return mockProperties.map((m, i) => {
-      const fingerprint = this.computeFingerprint({ prefecture, city: m.city, price: m.price, area: m.area, rooms: m.rooms });
-      return this.buildBaseProperty({
-        sitePropertyId: `mock_${prefecture}_kenbiya_${i}`,
-        title: m.title,
-        propertyType: 'investment',
-        prefecture,
-        city: m.city,
-        detailUrl: `https://www.kenbiya.com/ar/${String(parseInt(prefecture)).padStart(4, '0')}/`,
-        price: m.price,
-        priceText: `${m.price.toLocaleString()}万円`,
-        area: m.area,
-        buildingArea: m.area,
-        rooms: m.rooms,
-        age: m.age,
-        station: m.station,
-        stationMinutes: m.stationMinutes,
-        yieldRate: m.yieldRate,
-        description: `健美家掲載の収益物件。${m.city}エリア。表面利回り${m.yieldRate}%。`,
-        features: ['一棟物件', '投資用', '利回り良好', '管理会社あり'],
-        latitude:  m.lat + (i - 1) * 0.01,
-        longitude: m.lng + (i - 1) * 0.01,
-        fingerprint,
-        managementFee: null,
-        repairFund: null,
-        direction: null,
-        structure: null,
-        floorPlanUrl: null,
-        exteriorUrl: null,
-        lastSeenAt: null,
-      });
+    let cards: Element[] = [];
+    for (const sel of cardSelectors) {
+      const found = Array.from(doc.querySelectorAll(sel));
+      if (found.length > 0) { cards = found; break; }
+    }
+
+    if (cards.length === 0) return [];
+
+    for (const card of cards.slice(0, 20)) {
+      try {
+        const prop = this.cardToProperty(card, ogImage, prefecture);
+        if (prop) properties.push(prop);
+      } catch { continue; }
+    }
+
+    return properties;
+  }
+
+  private cardToProperty(
+    card: Element,
+    pageOgImage: string | null,
+    prefecture: PrefectureCode,
+  ): Property | null {
+    // Title & detail URL
+    const linkEl =
+      card.querySelector('h3 a') ??
+      card.querySelector('h2 a') ??
+      card.querySelector('.bukken-name a') ??
+      card.querySelector('.property-name a') ??
+      card.querySelector('a[href*="bukken"]') ??
+      card.querySelector('a[href*="kenbiya.com"]') ??
+      card.querySelector('a');
+
+    const href = linkEl?.getAttribute('href') ?? '';
+    const titleText = linkEl?.textContent?.trim() ?? '';
+    if (!titleText) return null;
+
+    const detailUrl = href.startsWith('http') ? href : `https://www.kenbiya.com${href}`;
+    const sitePropertyId = this.idFromUrl(detailUrl);
+
+    // Price
+    const priceText = this.firstText(card, [
+      '.price',
+      '[class*="price"]',
+      '.bukken-price',
+    ]) ?? '';
+    const { price, priceText: priceLabel } = this.extractPrice(priceText);
+
+    // Area
+    const areaText = this.firstText(card, [
+      '.area',
+      '[class*="area"]',
+      '.bukken-area',
+    ]) ?? card.textContent ?? '';
+    const area = this.extractArea(areaText);
+
+    // Rooms
+    const cardText = card.textContent ?? '';
+    const rooms = cardText.match(/(\d+[室戸棟])/)?.[1] ??
+                  cardText.match(/([1-9][LDKSR]+)/)?.[1] ?? null;
+
+    // Station
+    const { station, stationMinutes } = this.extractStation(cardText);
+
+    // Age
+    const age = this.extractAge(cardText);
+
+    // City / address
+    const addrText = this.firstText(card, [
+      '.address',
+      '[class*="address"]',
+      '[class*="location"]',
+    ]) ?? '';
+    const city = (addrText || cardText).match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+
+    // 利回り抽出 — 健美家の投資物件に必須
+    const yieldRate = this.extractYieldRate(cardText);
+
+    // Images
+    const imgSrcs = Array.from(card.querySelectorAll('img'))
+      .map(img => img.getAttribute('src') ?? '')
+      .filter(s => s.startsWith('http') && !s.match(/(?:logo|icon|sprite|blank|pixel)/i))
+      .slice(0, 10);
+
+    const thumbnailUrl = imgSrcs[0] ?? pageOgImage ?? null;
+
+    const managementFee = this.extractMonthlyFee(cardText, '管理費');
+    const repairFund = this.extractMonthlyFee(cardText, '修繕積立金');
+    const direction = this.extractDirection(cardText);
+    const structure = this.extractStructure(cardText);
+
+    const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms });
+
+    return this.buildBaseProperty({
+      sitePropertyId,
+      title: titleText,
+      propertyType: 'investment',
+      prefecture,
+      city,
+      detailUrl,
+      price,
+      priceText: priceLabel || priceText || '価格要相談',
+      area,
+      rooms,
+      age,
+      station,
+      stationMinutes,
+      yieldRate,
+      thumbnailUrl,
+      images: imgSrcs,
+      managementFee,
+      repairFund,
+      direction,
+      structure,
+      fingerprint,
     });
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  /** 利回り抽出: "利回り 8.5%" / "8.5%" / "表面利回り：8.50%" パターン */
+  protected extractYieldRate(text: string): number | null {
+    const m = text.match(/利回り[\s:：]*([0-9]+(?:\.[0-9]+)?)\s*%/) ??
+              text.match(/([0-9]+(?:\.[0-9]+)?)\s*%\s*(?:利回り|想定)/);
+    if (m) {
+      const val = parseFloat(m[1]);
+      // Sanity check: yield rate should be between 0 and 50%
+      if (!isNaN(val) && val > 0 && val < 50) return val;
+    }
+    return null;
+  }
+
+  /** Return text content of the first matching selector in a card element. */
+  private firstText(card: Element, selectors: string[]): string | null {
+    for (const sel of selectors) {
+      const text = card.querySelector(sel)?.textContent?.trim();
+      if (text) return text;
+    }
+    return null;
+  }
+
+  /** Build a stable site_property_id from a detail URL. */
+  private idFromUrl(url: string): string {
+    const m = url.match(/\/(\d{6,})\//);
+    if (m) return m[1];
+    return btoa(encodeURIComponent(url.replace(/https?:\/\/[^/]+/, ''))).slice(0, 24);
+  }
+
+  /** Best-effort city extraction from a Japanese address string. */
+  private cityFromAddress(addr: string): string | null {
+    return addr.match(/([^\s　]+[市区町村])/)?.[1] ?? null;
   }
 }
