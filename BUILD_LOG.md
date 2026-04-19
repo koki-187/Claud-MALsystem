@@ -127,3 +127,22 @@
   - サイト別: reins +210k / athome +49k / suumo +47k
 - **デプロイ**: 不要（D1直接更新）
 - **次のタスク**: スクレイパーHTMLパース改修・画像パイプライン実装・fingerprint計算ロジック追加
+
+## 2026-04-19 18:00-18:30 (Desktop) — 34エージェント並列実行
+- **環境**: Desktop (Claude Code) — OMC + executor agent + 並列調査
+- **ブランチ**: master
+- **変更内容**:
+  - **B 完了**: R2画像ダウンロードパイプライン実装 (commit `c089166`)
+    - 新規: `src/services/image-pipeline.ts` (enqueueImage/processQueue/enqueueAll)
+    - admin API追加: `POST /api/admin/images/{enqueue-all,process}` `GET /api/admin/images/queue-status`
+    - cron scheduled handler に `processQueue(env, 50)` 自動実行を追加
+  - **C 完了**: fingerprint調査の結果、TERASS CSV由来の12文字ハッシュが既に正しく機能していることを確認
+    - 926,226件 / 830,802ユニーク = 重複率 約10%（健全）
+    - `d1_bulk_import_v2.mjs` に `calcFingerprint()` フォールバックを追加（将来の非TERASSデータ対応）
+    - `d1_fingerprint_backfill.mjs` 作成（必要時に実行可能）
+  - **D 完了**: csv_imports に初期インポート926k件のレコード追加 → `lastCsvImportAt: 2026-04-19 09:20:47` 反映
+    - `d1_bulk_import_v2.mjs` に `recordCsvImport()` 関数追加（今後のインポートで自動記録）
+  - **A 設計提案**: `docs/SCRAPER_REWRITE_PROPOSAL.md` 作成
+    - Option A/B/C 3案を比較、推奨は Phase 1 (TERASS自動化) → Phase 2 (linkedom導入) の段階移行
+- **デプロイ**: image-pipeline は次回wrangler deploy時に有効化
+- **次のタスク**: スクレイパー改修 Phase 1 着手判断
