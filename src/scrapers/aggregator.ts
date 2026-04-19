@@ -1,5 +1,6 @@
 import type { Property, SearchParams, SiteId, SiteSearchResult, PrefectureCode } from '../types';
 import type { Bindings } from '../types';
+import { enqueueAll } from '../services/image-pipeline';
 import type { BaseScraper } from './base';
 import { SuumoScraper } from './suumo';
 import { HomesScraper } from './homes';
@@ -32,7 +33,7 @@ const PREFECTURE_ROTATION: PrefectureCode[][] = [
   ['07', '04', '41'], // 6 Sun  福島・宮城・佐賀
 ];
 
-function createScrapers(): Record<SiteId, BaseScraper> {
+function createScrapers(): Partial<Record<SiteId, BaseScraper>> {
   return {
     suumo:     new SuumoScraper(),
     homes:     new HomesScraper(),
@@ -43,6 +44,7 @@ function createScrapers(): Record<SiteId, BaseScraper> {
     reins:     new ReinsScraper(),
     kenbiya:   new KenbiyaScraper(),
     rakumachi: new RakumachiScraper(),
+    // terass_* are DB-only (imported via CSV); no live scraper
   };
 }
 
@@ -310,6 +312,9 @@ export async function runScheduledScrape(env: Bindings): Promise<{
       }
     }
   }
+
+  // Enqueue pending images after scrape completes
+  await enqueueAll(env).catch(() => { /* non-fatal */ });
 
   return { total, newCount, updatedCount, soldCount, errors };
 }

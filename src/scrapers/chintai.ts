@@ -95,7 +95,7 @@ export class ChintaiScraper extends BaseScraper {
           propertyType: 'chintai_mansion',
           prefecture,
           city,
-          detailUrl: partial.detailUrl,
+          detailUrl: partial.detailUrl ?? null,
           ...partial,
           fingerprint,
         }));

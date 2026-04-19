@@ -72,7 +72,7 @@ export class HomesScraper extends BaseScraper {
           propertyType: 'mansion',
           prefecture,
           city,
-          detailUrl: partial.detailUrl,
+          detailUrl: partial.detailUrl ?? null,
           ...partial,
           fingerprint,
         }));

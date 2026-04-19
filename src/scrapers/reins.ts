@@ -77,7 +77,7 @@ export class ReinsScraper extends BaseScraper {
           propertyType: partial.propertyType ?? 'mansion',
           prefecture,
           city,
-          detailUrl: partial.detailUrl,
+          detailUrl: partial.detailUrl ?? null,
           ...partial,
           fingerprint,
         }));

@@ -74,7 +74,7 @@ export async function searchProperties(
     const q = `%${params.query}%`;
     bindings.push(q, q, q);
   }
-  if (params.hideDuplicates) {
+  if (params.hideDuplicates ?? true) {
     whereClauses.push(`p.id IN (
       SELECT MIN(id) FROM properties WHERE fingerprint IS NOT NULL
       GROUP BY fingerprint
@@ -107,6 +107,7 @@ export async function searchProperties(
     .prepare(`
       SELECT p.*,
         GROUP_CONCAT(DISTINCT pi.image_url) as images_concat,
+        GROUP_CONCAT(DISTINCT pi.r2_key) as image_keys_concat,
         GROUP_CONCAT(DISTINCT pf.feature) as features_concat
       FROM properties p
       LEFT JOIN property_images pi ON pi.property_id = p.id
@@ -121,7 +122,7 @@ export async function searchProperties(
 
   const properties: Property[] = (rows.results ?? []).map(rowToProperty);
 
-  const allSites: SiteId[] = ['suumo', 'homes', 'athome', 'fudosan', 'chintai', 'smaity', 'reins', 'kenbiya', 'rakumachi'];
+  const allSites: SiteId[] = ['suumo', 'homes', 'athome', 'fudosan', 'chintai', 'smaity', 'reins', 'kenbiya', 'rakumachi', 'terass_reins', 'terass_suumo', 'terass_athome'];
   const siteCountRows = await db
     .prepare(`SELECT site_id, COUNT(*) as cnt FROM properties p ${whereSQL} GROUP BY site_id`)
     .bind(...bindings)
@@ -152,6 +153,7 @@ export async function getPropertyById(db: D1Database, id: string): Promise<Prope
     .prepare(`
       SELECT p.*,
         GROUP_CONCAT(DISTINCT pi.image_url) as images_concat,
+        GROUP_CONCAT(DISTINCT pi.r2_key) as image_keys_concat,
         GROUP_CONCAT(DISTINCT pf.feature) as features_concat
       FROM properties p
       LEFT JOIN property_images pi ON pi.property_id = p.id
@@ -290,9 +292,10 @@ function rowToProperty(row: Record<string, unknown>): Property {
     totalFloors: (row.total_floors as number) ?? null,
     station: (row.station as string) ?? null,
     stationMinutes: (row.station_minutes as number) ?? null,
-    images: row.images_concat ? (row.images_concat as string).split(',') : [],
+    images: row.images_concat ? (row.images_concat as string).split(',').filter(Boolean) : [],
+    imageKeys: row.image_keys_concat ? (row.image_keys_concat as string).split(',').filter(Boolean) : [],
     thumbnailUrl: (row.thumbnail_url as string) ?? null,
-    detailUrl: row.detail_url as string,
+    detailUrl: (row.detail_url as string) || null,
     description: (row.description as string) ?? null,
     features: row.features_concat ? (row.features_concat as string).split(',').filter(Boolean) : [],
     yieldRate: (row.yield_rate as number) ?? null,

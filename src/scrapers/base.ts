@@ -346,7 +346,7 @@ export abstract class BaseScraper {
     propertyType: Property['propertyType'];
     prefecture: PrefectureCode;
     city: string;
-    detailUrl: string;
+    detailUrl: string | null;
   }): Property {
     return {
       id: this.generateId(overrides.sitePropertyId),
@@ -370,6 +370,7 @@ export abstract class BaseScraper {
       direction: null,
       structure: null,
       images: [],
+      imageKeys: [],
       thumbnailUrl: null,
       floorPlanUrl: null,
       exteriorUrl: null,

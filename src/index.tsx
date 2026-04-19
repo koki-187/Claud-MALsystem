@@ -206,6 +206,25 @@ app.get('/api/suggest', async (c) => {
   }
 });
 
+// R2 image delivery
+app.get('/api/images/*', async (c) => {
+  const key = c.req.path.replace('/api/images/', '');
+  if (!key) return c.notFound();
+  try {
+    const obj = await c.env.MAL_STORAGE.get(key);
+    if (!obj) return c.notFound();
+    const ct = obj.httpMetadata?.contentType ?? 'image/jpeg';
+    return new Response(obj.body, {
+      headers: {
+        'Content-Type': ct,
+        'Cache-Control': 'public, max-age=31536000, immutable',
+      },
+    });
+  } catch {
+    return c.notFound();
+  }
+});
+
 app.get('/api/transactions', async (c) => {
   const prefecture = c.req.query('prefecture') ?? '13';
   const limit = Math.min(parseInt(c.req.query('limit') ?? '20'), 100);
@@ -819,6 +838,25 @@ img { max-width: 100%; }
 .gallery-img { width: 120px; height: 90px; object-fit: cover; border-radius: 8px; flex-shrink: 0; cursor: pointer; transition: opacity var(--transition); }
 .gallery-img:hover { opacity: .85; }
 .floor-plan { max-width: 200px; border-radius: 8px; border: 1px solid var(--c-border); }
+
+/* ── Print (マイソク印刷) ── */
+@page { size: A4; margin: 10mm; }
+@media print {
+  .header, .search-panel, .export-bar, .filter-chips,
+  .tab-bar, .results-bar, .site-summary, .loadingState,
+  #resultsContainer, #pagination, #emptyState, #initialState,
+  #transactionsPanel, .modal-close, .btn-ghost,
+  .modal-overlay ~ .modal-overlay { display: none !important; }
+  .modal-overlay { position: static !important; background: none !important;
+    padding: 0 !important; backdrop-filter: none !important; display: block !important; }
+  .modal-box { position: static !important; box-shadow: none !important;
+    max-width: 100% !important; max-height: none !important;
+    border: none !important; overflow: visible !important; }
+  .gallery-img { width: auto; max-width: 100%; height: auto; max-height: 200px; }
+  .img-gallery { flex-wrap: wrap; overflow: visible; }
+  a[class="modal-cta"] { display: none !important; }
+  body { background: #fff !important; color: #000 !important; }
+}
   </style>
 </head>
 <body class="page-wrap">
@@ -969,7 +1007,7 @@ img { max-width: 100%; }
     <!-- Sites -->
     <div class="sites-row">
       <div class="sites-label">
-        対象サイト（9サイト）
+        対象サイト（12サイト）
         <button class="sites-toggle-btn" onclick="toggleAllSites(true)">全選択</button>
         <button class="sites-toggle-btn" onclick="toggleAllSites(false)" style="color:var(--c-text3)">全解除</button>
       </div>
@@ -1234,7 +1272,8 @@ async function doSearch(page) {
   if (stationMin) q.set('station_min', stationMin);
   if (ageMax) q.set('age_max', ageMax);
   if (hideDuplicates) q.set('hide_duplicates', '1');
-  if (sites.length > 0 && sites.length < 9) q.set('sites', sites.join(','));
+  var totalSites = Object.keys(SITES_DATA).length;
+  if (sites.length > 0 && sites.length < totalSites) q.set('sites', sites.join(','));
   q.set('sort', sortBy);
   q.set('page', String(page));
   q.set('limit', '18');
@@ -1310,8 +1349,11 @@ function renderCard(p) {
   // Detect "new" (scraped within last 3 days)
   var isNew = !isSold && p.scrapedAt && (Date.now() - new Date(p.scrapedAt).getTime()) < 3 * 86400000;
 
-  var imgContent = p.thumbnailUrl
-    ? '<img src="' + escAttr(p.thumbnailUrl) + '" alt="' + escHtml(p.title) + '" loading="lazy" onerror="this.parentElement.innerHTML=\'<div class=prop-img-placeholder>\'+\'' + (site.logo || '🏠') + '\'+'\'</div>\'">'
+  var firstImgSrc = (p.imageKeys && p.imageKeys.length > 0)
+    ? '/api/images/' + encodeURIComponent(p.imageKeys[0])
+    : (p.thumbnailUrl || null);
+  var imgContent = firstImgSrc
+    ? '<img src="' + escAttr(firstImgSrc) + '" alt="' + escHtml(p.title) + '" loading="lazy" onerror="this.parentElement.innerHTML=\'<div class=prop-img-placeholder>\'+\'' + (site.logo || '🏠') + '\'+'\'</div>\'">'
     : '<div class="prop-img-placeholder">' + (site.logo || '🏠') + '</div>';
 
   var soldOverlay = isSold ? '<div class="prop-badge-sold">売却済</div>' : '';
@@ -1340,8 +1382,7 @@ function renderCard(p) {
     + '<div class="prop-specs">' + specs.join('') + '</div>'
     + '<div class="prop-footer">'
     + '<span style="font-size:11px;color:var(--c-text4)">' + formatDate(p.scrapedAt) + '</span>'
-    + '<a href="' + escAttr(p.detailUrl) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="prop-ext-link" style="background:' + color + '18;color:' + color + '">'
-    + '詳細 <i class="fas fa-external-link-alt"></i></a>'
+    + (p.detailUrl ? '<a href="' + escAttr(p.detailUrl) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="prop-ext-link" style="background:' + color + '18;color:' + color + '">詳細 <i class="fas fa-external-link-alt"></i></a>' : '')
     + '</div>'
     + '</div>'
     + '</div>';
@@ -1417,15 +1458,21 @@ function renderModal(p) {
   var priceStr = p.price ? p.price.toLocaleString() + '万円' : (p.priceText || '価格要相談');
   var prefName = PREF_DATA[p.prefecture] || '';
 
-  // 画像ギャラリー（最大5枚）
+  // 画像ギャラリー（最大5枚）— R2 keys優先、fallback to images/thumbnailUrl
   var gallery = '';
-  if (p.images && p.images.length > 0) {
-    gallery = '<div class="img-gallery">'
-      + p.images.slice(0, 5).map(function(img) {
-          return '<img src="' + escAttr(img) + '" class="gallery-img" alt="物件画像" loading="lazy" onclick="openImg(\'' + escAttr(img) + '\')" onerror="this.style.display=\'none\'">';
-        }).join('') + '</div>';
+  var galSrcs = [];
+  if (p.imageKeys && p.imageKeys.length > 0) {
+    galSrcs = p.imageKeys.slice(0, 5).map(function(k) { return '/api/images/' + encodeURIComponent(k); });
+  } else if (p.images && p.images.length > 0) {
+    galSrcs = p.images.slice(0, 5);
   } else if (p.thumbnailUrl) {
-    gallery = '<div class="img-gallery"><img src="' + escAttr(p.thumbnailUrl) + '" class="gallery-img" alt="物件画像" loading="lazy" onerror="this.style.display=\'none\'"></div>';
+    galSrcs = [p.thumbnailUrl];
+  }
+  if (galSrcs.length > 0) {
+    gallery = '<div class="img-gallery">'
+      + galSrcs.map(function(src) {
+          return '<img src="' + escAttr(src) + '" class="gallery-img" alt="物件画像" loading="lazy" onclick="openImg(\'' + escAttr(src) + '\')" onerror="this.style.display=\'none\'">';
+        }).join('') + '</div>';
   }
 
   // 間取り図
@@ -1477,8 +1524,10 @@ function renderModal(p) {
     + floorPlanHtml
     + features
     + desc
-    + '<a href="' + escAttr(p.detailUrl) + '" target="_blank" rel="noopener noreferrer" class="modal-cta">'
-    + '<i class="fas fa-external-link-alt mr-2"></i>' + escHtml(site.name || 'サイト') + 'で詳細を見る</a>';
+    + '<div style="display:flex;gap:10px;margin-top:4px">'
+    + (p.detailUrl ? '<a href="' + escAttr(p.detailUrl) + '" target="_blank" rel="noopener noreferrer" class="modal-cta" style="flex:1"><i class="fas fa-external-link-alt mr-2"></i>' + escHtml(site.name || 'サイト') + 'で詳細を見る</a>' : '')
+    + '<button onclick="window.print()" class="btn-ghost" style="flex-shrink:0;padding:14px 20px;font-size:15px;font-weight:800;border-radius:10px" title="マイソク印刷"><i class="fas fa-print"></i> 印刷</button>'
+    + '</div>';
 }
 
 function openImg(url) {

@@ -20,7 +20,8 @@ export const PREFECTURES: Record<PrefectureCode, string> = {
   '46': '鹿児島県', '47': '沖縄県',
 };
 
-export type SiteId = 'suumo' | 'homes' | 'athome' | 'fudosan' | 'chintai' | 'smaity' | 'reins' | 'kenbiya' | 'rakumachi';
+export type SiteId = 'suumo' | 'homes' | 'athome' | 'fudosan' | 'chintai' | 'smaity' | 'reins' | 'kenbiya' | 'rakumachi'
+  | 'terass_reins' | 'terass_suumo' | 'terass_athome';
 
 export interface SiteConfig {
   id: SiteId;
@@ -32,15 +33,18 @@ export interface SiteConfig {
 }
 
 export const SITES: Record<SiteId, SiteConfig> = {
-  suumo:     { id: 'suumo',     name: 'SUUMO',       url: 'https://suumo.jp',              logo: '🏠', color: '#00A960', rateLimit: 10 },
-  homes:     { id: 'homes',     name: "HOME'S",       url: 'https://www.homes.co.jp',       logo: '🏡', color: '#FF6B35', rateLimit: 10 },
-  athome:    { id: 'athome',    name: 'AtHome',       url: 'https://www.athome.co.jp',      logo: '🏘', color: '#0066CC', rateLimit: 10 },
-  fudosan:   { id: 'fudosan',   name: '不動産Japan',   url: 'https://fudosan.jp',            logo: '🏗', color: '#E74C3C', rateLimit: 8  },
-  chintai:   { id: 'chintai',   name: 'CHINTAI',      url: 'https://chintai.net',           logo: '🏢', color: '#9B59B6', rateLimit: 8  },
-  smaity:    { id: 'smaity',    name: 'Smaity',       url: 'https://smaity.com',            logo: '🏬', color: '#F39C12', rateLimit: 6  },
-  reins:     { id: 'reins',     name: 'REINS',        url: 'https://www.reins.or.jp',       logo: '📋', color: '#2ECC71', rateLimit: 5  },
-  kenbiya:   { id: 'kenbiya',   name: '健美家',        url: 'https://www.kenbiya.com',       logo: '💰', color: '#DC2626', rateLimit: 8  },
-  rakumachi: { id: 'rakumachi', name: '楽待',          url: 'https://www.rakumachi.jp',      logo: '📈', color: '#7C3AED', rateLimit: 8  },
+  suumo:        { id: 'suumo',        name: 'SUUMO',         url: 'https://suumo.jp',                      logo: '🏠', color: '#00A960', rateLimit: 10 },
+  homes:        { id: 'homes',        name: "HOME'S",        url: 'https://www.homes.co.jp',               logo: '🏡', color: '#FF6B35', rateLimit: 10 },
+  athome:       { id: 'athome',       name: 'AtHome',        url: 'https://www.athome.co.jp',              logo: '🏘', color: '#0066CC', rateLimit: 10 },
+  fudosan:      { id: 'fudosan',      name: '不動産Japan',    url: 'https://fudosan.jp',                    logo: '🏗', color: '#E74C3C', rateLimit: 8  },
+  chintai:      { id: 'chintai',      name: 'CHINTAI',       url: 'https://chintai.net',                   logo: '🏢', color: '#9B59B6', rateLimit: 8  },
+  smaity:       { id: 'smaity',       name: 'Smaity',        url: 'https://smaity.com',                    logo: '🏬', color: '#F39C12', rateLimit: 6  },
+  reins:        { id: 'reins',        name: 'REINS',         url: 'https://www.reins.or.jp',               logo: '📋', color: '#2ECC71', rateLimit: 5  },
+  kenbiya:      { id: 'kenbiya',      name: '健美家',         url: 'https://www.kenbiya.com',               logo: '💰', color: '#DC2626', rateLimit: 8  },
+  rakumachi:    { id: 'rakumachi',    name: '楽待',           url: 'https://www.rakumachi.jp',              logo: '📈', color: '#7C3AED', rateLimit: 8  },
+  terass_reins: { id: 'terass_reins', name: 'TERASS-REINS',  url: 'https://picks.terass-agents.com',       logo: '📋', color: '#10B981', rateLimit: 0  },
+  terass_suumo: { id: 'terass_suumo', name: 'TERASS-SUUMO',  url: 'https://picks.terass-agents.com',       logo: '🏠', color: '#059669', rateLimit: 0  },
+  terass_athome:{ id: 'terass_athome',name: 'TERASS-AtHome', url: 'https://picks.terass-agents.com',       logo: '🏘', color: '#0891B2', rateLimit: 0  },
 };
 
 export type PropertyType =
@@ -82,10 +86,11 @@ export interface Property {
   direction: string | null;         // 向き (南向き等)
   structure: string | null;         // 構造 (RC造等)
   images: string[];
+  imageKeys: string[];              // R2 keys for /api/images/* delivery
   thumbnailUrl: string | null;
   floorPlanUrl: string | null;      // 間取り図URL
   exteriorUrl: string | null;       // 外観画像URL
-  detailUrl: string;
+  detailUrl: string | null;         // null when empty (e.g. TERASS data)
   description: string | null;
   features: string[];
   yieldRate: number | null;         // 表面利回り % (投資物件)
