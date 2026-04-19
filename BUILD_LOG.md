@@ -23,6 +23,23 @@
 
 ---
 
+## 2026-04-19 (Web/Remote)
+- **環境**: Web (Claude Code Remote)
+- **ブランチ**: master
+- **コミット**: `55bbf70`
+- **変更内容**: Phase 2 batch B — reins/kenbiya/rakumachi 全面書換 (投資物件yieldRate対応)
+  - `src/scrapers/reins.ts` 全面書換: mockフォールバック廃止、JSON-LD優先 → CSSセレクタfallback の2段構え
+  - `src/scrapers/kenbiya.ts` 全面書換: 同パターン + `extractYieldRate()` 実装 (additionalProperty→description→title優先順)
+  - `src/scrapers/rakumachi.ts` 全面書換: 同パターン + `extractYieldRate()` 実装 (利回り%正規表現、0-50%サニティチェック)
+  - テストフィクスチャ3件新規作成 (JSON-LD 2件 + DOMカード 2件、kenbiya/rakumachiは利回り含む)
+  - テスト3件新規作成 (reins:24件, kenbiya:26件, rakumachi:29件 計79テスト全PASS)
+- **TypeScript**: `tsc --noEmit` ゼロエラー
+- **テスト**: 79/79 PASS
+- **デプロイ**: 未 (wrangler deployはデスクトップ環境で実行)
+- **次のタスク**: デプロイ実行 + 別agentがathome/fudosan/chintai/smaityを並行作業中
+
+---
+
 ## 2026-04-19 (Desktop)
 - **環境**: Desktop (Claude Code)
 - **ブランチ**: master
