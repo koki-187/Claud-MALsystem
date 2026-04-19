@@ -9,8 +9,11 @@ const admin = new Hono<{ Bindings: Bindings }>();
 async function safeFirst<T>(stmt: D1PreparedStatement): Promise<T | null> {
   try { return await stmt.first<T>(); } catch { return null; }
 }
-async function safeAll<T>(stmt: D1PreparedStatement): Promise<D1Result<T>> {
-  try { return await stmt.all<T>(); } catch { return { results: [], success: false, meta: {} as D1Meta }; }
+async function safeAll<T>(stmt: D1PreparedStatement): Promise<{ results: T[] }> {
+  try {
+    const r = await stmt.all<T>();
+    return { results: r.results ?? [] };
+  } catch { return { results: [] }; }
 }
 
 // ─── GET /api/admin/stats ─────────────────────────────────────────────────────

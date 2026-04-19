@@ -146,3 +146,21 @@
     - Option A/B/C 3案を比較、推奨は Phase 1 (TERASS自動化) → Phase 2 (linkedom導入) の段階移行
 - **デプロイ**: image-pipeline は次回wrangler deploy時に有効化
 - **次のタスク**: スクレイパー改修 Phase 1 着手判断
+
+## 2026-04-19 19:00 (Desktop) — 残存課題3件解決
+- **環境**: Desktop (Claude Code) — 並列実行+トークン効率重視
+- **ブランチ**: master
+- **変更内容**:
+  - **#3 完了**: TypeScript型エラー2件修正
+    - `src/routes/admin.ts:13` の `safeAll` を `Promise<{ results: T[] }>` 型に簡略化
+    - `npx tsc --noEmit` でエラー0件確認
+  - **#2 完了**: 画像パイプラインを本番デプロイ
+    - `wrangler deploy` 実行 (Version ID: f00c4ff8)
+    - 新エンドポイント本番反映: `POST /api/admin/images/{enqueue-all,process}` `GET /api/admin/images/queue-status`
+    - cron scheduled handler に `processQueue(env, 50)` 配備済（4回/日）
+  - **#1 Phase 1 スケルトン**: `scripts/auto-import-terass.sh` 作成
+    - Windows Task Scheduler / cron 用トリガースクリプト
+    - 既存 `d1_bulk_import_v2.mjs` をラップして自動ヘルスチェックまで実行
+    - 残作業: TERASS PICKS → CSV 抽出部分（Playwright/Chrome拡張、別セッション推奨）
+- **デプロイ**: 済 (mal-search-system)
+- **次のタスク**: スクレイパー改修 Phase 2 (linkedom導入によるHTMLパーサー実装)

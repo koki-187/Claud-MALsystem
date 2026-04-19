@@ -54,6 +54,12 @@
    - `csv_imports` 自動記録（実装済）
 2. これで `lastCsvImportAt` が日次更新され、データ鮮度が確保される
 
+**Phase 1 スケルトン実装済**:
+- `scripts/auto-import-terass.sh` — cron 起動用トリガースクリプト
+- 実行: `./scripts/auto-import-terass.sh` または Task Scheduler 登録
+- 残作業: TERASS PICKS → CSV 抽出部分（Playwright/Chrome拡張）
+- バックエンドは既存 `POST /api/admin/import` または `d1_bulk_import_v2.mjs` で対応可能
+
 ### Phase 2 (Phase 1 安定後・3週間)
 1. 高優先度2サイト (SUUMO, AtHome) で Option A 適用
 2. linkedom 導入、CSSセレクタベース実装
