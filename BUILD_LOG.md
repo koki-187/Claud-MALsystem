@@ -272,6 +272,26 @@
   - ⚠️ **D1 size limit到達** (589MB / 926k rows) — 新規スクレイプ書込が `D1_ERROR: Exceeded maximum DB size`
 - **次のタスク**: D1容量対策 (sold cleanup or paid plan upgrade) → 容量解決後 cron で実データ蓄積開始
 
+## 2026-04-19 (Desktop) — SUUMO/AtHome/CHINTAI/fudosan スクレイパー実HTML検証修正
+
+- **環境**: Desktop (Claude Code)
+- **ブランチ**: master
+- **コミット**: `19e54f2`
+- **変更内容**: 4ポータルサイトのスクレイパーをURL・セレクタを実HTML検証で修正
+  - `src/scrapers/chintai.ts`: `idFromUrl` に `/bk-([A-Za-z0-9]+)/` パターン追加 → CHINTAIの `sitePropertyId` 衝突解消
+  - `src/scrapers/athome.ts`: PREF_SLUG mapで `/mansion/chuko/{slug}/list/` URL修正、.card-box/.title-wrap__title-text/.property-price セレクタ修正
+  - `src/scrapers/suumo.ts`: Chrome UA追加、`.property_unit-title a` リンク、`.dottable-value` 価格、`rel` 属性画像URL対応
+  - `src/scrapers/fudosan.ts`: fudosan.jp DNS NXDOMAIN — 0件graceful return維持（変更なし）
+- **検証結果**:
+  - **chintai**: `completed` ✅ — 20件取得確認、idFromUrl fix済みで一意ID生成確認 (`002560000000000540760024` 等)
+  - **suumo**: `skipped_mock` ⚠️ — bot protection (GalileoCookie + JSESSIONID) でブロック。URL/セレクタコードは正しいが live verification pending
+  - **athome**: `skipped_mock` ⚠️ — Angular SSR + IP geolocation差異により0件。URL/セレクタコードは正しいが live verification pending
+  - **fudosan**: `skipped_mock` ⚠️ — fudosan.jp DNS NXDOMAIN (real fetch blocked permanently)
+- **デプロイ**: 済 (コミット `b0f5a88` で既にデプロイ済みのWorkerにidFromUx fixが含まれることをworkers_get_worker_codeで確認)
+- **次のタスク**: 次のcronサイクルでCHINTAI D1書込みが一意IDで行われることを確認 / SUUMO cookie sessionハンドリング検討
+
+---
+
 ## 2026-04-19 22:55 (Desktop) — D1容量回復 + 本番スクレイプ初成功
 - **環境**: Desktop (Claude Code) — D1直接操作 (Cloudflare MCP)
 - **ブランチ**: master
