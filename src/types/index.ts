@@ -212,6 +212,70 @@ export interface AdminStats {
   lastCsvImportAt: string | null;
 }
 
+export type MasterInternalStatus = 'available' | 'showing' | 'contracted' | 'sold';
+
+export interface SourceListing {
+  siteId: SiteId;
+  sitePropertyId: string;
+  detailUrl: string | null;
+  thumbnailUrl: string | null;
+  price: number | null;
+  scrapedAt: string;
+}
+
+export interface MasterProperty {
+  id: string;
+  fingerprint: string;
+  title: string;
+  propertyType: PropertyType;
+  prefecture: PrefectureCode;
+  city: string;
+  address: string | null;
+  price: number | null;
+  area: number | null;
+  buildingArea: number | null;
+  landArea: number | null;
+  rooms: string | null;
+  age: number | null;
+  floor: number | null;
+  totalFloors: number | null;
+  station: string | null;
+  stationMinutes: number | null;
+  managementFee: number | null;
+  repairFund: number | null;
+  direction: string | null;
+  structure: string | null;
+  yieldRate: number | null;
+  latitude: number | null;
+  longitude: number | null;
+  description: string | null;
+  sourceCount: number;
+  sourceSites: SiteId[];
+  primarySourceId: string | null;
+  primaryThumbnailUrl: string | null;
+  primaryR2Key: string | null;
+  internalStatus: MasterInternalStatus;
+  agentId: string | null;
+  internalNotes: string | null;
+  favorite: boolean;
+  viewCount: number;
+  firstListedAt: string | null;
+  lastSeenAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  sources: SourceListing[];
+}
+
+export interface MasterSearchResult {
+  masters: MasterProperty[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  executionTimeMs: number;
+  cacheHit: boolean;
+}
+
 export interface Bindings {
   MAL_DB: D1Database;
   MAL_CACHE: KVNamespace;

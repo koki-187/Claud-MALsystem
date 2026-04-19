@@ -4,12 +4,13 @@ import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 import { timing } from 'hono/timing';
 import type { Bindings, AppVariables } from './types';
-import { searchProperties, getPropertyById, getStats, logSearch } from './db/queries';
+import { searchProperties, getPropertyById, getStats, logSearch, searchMasters } from './db/queries';
 import { aggregateSearch, runScheduledScrape } from './scrapers/aggregator';
 import { PREFECTURES, SITES } from './types';
 import { admin as adminRoutes } from './routes/admin';
 import { processQueue } from './services/image-pipeline';
 import { archiveOldestCold } from './services/archive';
+import { buildMasters } from './services/master-builder';
 
 const app = new Hono<{ Bindings: Bindings; Variables: AppVariables }>();
 
@@ -153,6 +154,42 @@ app.get('/api/stats', async (c) => {
   }
 });
 
+app.get('/api/search/master', async (c) => {
+  const q = c.req.query();
+  const startTime = Date.now();
+  const params = {
+    query: q.q,
+    prefecture: q.prefecture as any,
+    city: q.city,
+    propertyType: q.type as any,
+    priceMin: q.price_min ? parseInt(q.price_min) : undefined,
+    priceMax: q.price_max ? parseInt(q.price_max) : undefined,
+    areaMin: q.area_min ? parseFloat(q.area_min) : undefined,
+    areaMax: q.area_max ? parseFloat(q.area_max) : undefined,
+    rooms: q.rooms,
+    ageMax: q.age_max ? parseInt(q.age_max) : undefined,
+    stationMinutes: q.station_min ? parseInt(q.station_min) : undefined,
+    yieldMin: q.yield_min ? parseFloat(q.yield_min) : undefined,
+    sortBy: q.sort as any,
+    page: q.page ? parseInt(q.page) : 1,
+    limit: q.limit ? parseInt(q.limit) : 18,
+  };
+
+  try {
+    const cacheKey = `master:${new URLSearchParams(q).toString()}`;
+    const cached = await c.env.MAL_CACHE.get(cacheKey, 'json').catch(() => null);
+    if (cached) return c.json({ ...(cached as object), cacheHit: true });
+
+    const result = await searchMasters(c.env.MAL_DB, params);
+    result.executionTimeMs = Date.now() - startTime;
+    await c.env.MAL_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: 1800 }).catch(() => {});
+    return c.json(result);
+  } catch (error) {
+    console.error('[/api/search/master] error:', error);
+    return c.json({ error: 'Master search failed' }, 500);
+  }
+});
+
 app.get('/api/health', (c) => c.json({
   status: 'ok',
   version: c.env.APP_VERSION ?? '6.0.0',
@@ -283,6 +320,12 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
   }
   // 毎時: 画像キューを最大50件処理
   ctx.waitUntil(processQueue(env, 50).catch(console.error));
+  // 毎時: 未リンク properties を master_properties に変換 (最大5000件)
+  ctx.waitUntil(buildMasters(env, 5000).then(r => {
+    if (r.created + r.updated > 0) {
+      console.log(`[master-builder] created=${r.created} updated=${r.updated} linked=${r.linked}`);
+    }
+  }).catch(console.error));
   // D1容量監視: 450MB超で自動アーカイブ (5 batch × 2,000件 = 最大10,000件)
   ctx.waitUntil((async () => {
     try {
@@ -636,6 +679,17 @@ img { max-width: 100%; }
   font-size: 11px; font-weight: 800;
   background: #dc2626; color: #fff;
 }
+.prop-multi-source {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 8px; border-radius: 20px;
+  font-size: 10px; font-weight: 800;
+  background: linear-gradient(135deg,#7c3aed,#2563eb); color: #fff;
+  margin-left: 6px; vertical-align: middle;
+}
+.sources-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+.sources-table th { font-size: 10px; font-weight: 700; color: var(--c-text3); text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--c-border); }
+.sources-table td { padding: 6px 8px; border-bottom: 1px solid var(--c-border); vertical-align: middle; }
+.sources-table tr:last-child td { border-bottom: none; }
 .prop-body { padding: 14px 16px 16px; }
 .prop-title {
   font-size: 14px; font-weight: 700; color: var(--c-text);
@@ -1395,7 +1449,9 @@ function renderCard(p) {
     + '<div class="prop-price" style="color:' + (isSold ? 'var(--c-text3)' : color) + '">' + (isSold ? '<span style="font-size:14px;text-decoration:line-through">' : '') + escHtml(priceStr) + (isSold ? '</span>' : '') + '</div>'
     + '<div class="prop-specs">' + specs.join('') + '</div>'
     + '<div class="prop-footer">'
-    + '<span style="font-size:11px;color:var(--c-text4)">' + formatDate(p.scrapedAt) + '</span>'
+    + '<span style="font-size:11px;color:var(--c-text4)">' + formatDate(p.scrapedAt)
+    + (p.sourceCount && p.sourceCount > 1 ? '<span class="prop-multi-source">📚 ' + p.sourceCount + '媒体</span>' : '')
+    + '</span>'
     + (p.detailUrl ? '<a href="' + escAttr(p.detailUrl) + '" target="_blank" rel="noopener noreferrer" onclick="event.stopPropagation()" class="prop-ext-link" style="background:' + color + '18;color:' + color + '">詳細 <i class="fas fa-external-link-alt"></i></a>' : '')
     + '</div>'
     + '</div>'
@@ -1538,6 +1594,7 @@ function renderModal(p) {
     + floorPlanHtml
     + features
     + desc
+    + buildSourcesSection(p)
     + '<div style="display:flex;gap:10px;margin-top:4px">'
     + (p.detailUrl ? '<a href="' + escAttr(p.detailUrl) + '" target="_blank" rel="noopener noreferrer" class="modal-cta" style="flex:1"><i class="fas fa-external-link-alt mr-2"></i>' + escHtml(site.name || 'サイト') + 'で詳細を見る</a>' : '')
     + '<button onclick="window.print()" class="btn-ghost" style="flex-shrink:0;padding:14px 20px;font-size:15px;font-weight:800;border-radius:10px" title="マイソク印刷"><i class="fas fa-print"></i> 印刷</button>'
@@ -1549,6 +1606,24 @@ function openImg(url) {
 }
 
 function closeModal() { document.getElementById('propertyModal').classList.add('hidden'); }
+
+function buildSourcesSection(p) {
+  // p may have .sources (master search) or just siteId (legacy)
+  if (!p.sources || p.sources.length === 0) return '';
+  var rows = p.sources.map(function(s) {
+    var site = SITES_DATA[s.siteId] || {};
+    var priceStr = s.price ? s.price.toLocaleString() + '万円' : '-';
+    var linkCell = s.detailUrl
+      ? '<a href="' + escAttr(s.detailUrl) + '" target="_blank" rel="noopener noreferrer" style="color:var(--c-primary);font-weight:700;font-size:11px">詳細 <i class="fas fa-external-link-alt"></i></a>'
+      : '<span style="color:var(--c-text4)">-</span>';
+    return '<tr><td><span class="prop-badge-site" style="position:static;background:' + (site.color||'#64748b') + ';font-size:10px;padding:2px 7px">' + (site.logo||'') + ' ' + escHtml(site.name||s.siteId) + '</span></td>'
+      + '<td style="font-weight:700">' + escHtml(priceStr) + '</td>'
+      + '<td>' + linkCell + '</td></tr>';
+  }).join('');
+  return '<div style="margin-bottom:16px">'
+    + '<div style="font-size:11px;font-weight:700;color:var(--c-text3);letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px">📚 掲載媒体一覧 (' + p.sources.length + '件)</div>'
+    + '<table class="sources-table"><thead><tr><th>サイト</th><th>掲載価格</th><th>リンク</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
 
 // ── Stats Modal ──
 async function showStatsModal() {

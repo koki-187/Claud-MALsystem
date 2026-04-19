@@ -5,6 +5,7 @@ import { enqueueAll, processQueue } from '../services/image-pipeline';
 import { runScheduledScrape } from '../scrapers/aggregator';
 import { archiveOldestCold } from '../services/archive';
 import { discoverTerassImages } from '../services/terass-image-fetch';
+import { buildMasters, buildAllMasters } from '../services/master-builder';
 
 const admin = new Hono<{ Bindings: Bindings }>();
 
@@ -593,6 +594,109 @@ admin.post('/terass-image-discover', async (c) => {
     console.error('[admin/terass-image-discover] error:', e);
     return c.json({ error: 'Internal error' }, 500);
   }
+});
+
+// ─── POST /api/admin/master/build ────────────────────────────────────────────
+admin.post('/master/build', async (c) => {
+  const limit = Math.min(Number(c.req.query('limit') ?? '5000'), 5000);
+  try {
+    const result = await buildMasters(c.env, limit);
+    return c.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[admin/master/build] error:', e);
+    return c.json({ ok: false, error: 'Internal error' }, 500);
+  }
+});
+
+// ─── POST /api/admin/master/build-all ────────────────────────────────────────
+admin.post('/master/build-all', async (c) => {
+  const maxChunks = Math.min(Number(c.req.query('max_chunks') ?? '20'), 50);
+  const chunkSize = Math.min(Number(c.req.query('chunk_size') ?? '5000'), 5000);
+  try {
+    const result = await buildAllMasters(c.env, maxChunks, chunkSize);
+    return c.json({ ok: true, ...result });
+  } catch (e) {
+    console.error('[admin/master/build-all] error:', e);
+    return c.json({ ok: false, error: 'Internal error' }, 500);
+  }
+});
+
+// ─── GET /api/admin/master/stats ─────────────────────────────────────────────
+admin.get('/master/stats', async (c) => {
+  const [masterCount, unlinkedCount, statusBreakdown, siteBreakdown] = await Promise.all([
+    safeFirst<{ cnt: number }>(c.env.MAL_DB.prepare(`SELECT COUNT(*) as cnt FROM master_properties`)),
+    safeFirst<{ cnt: number }>(c.env.MAL_DB.prepare(
+      `SELECT COUNT(*) as cnt FROM properties WHERE fingerprint IS NOT NULL AND (master_id IS NULL OR master_id = '')`
+    )),
+    safeAll<{ internal_status: string; cnt: number }>(c.env.MAL_DB.prepare(
+      `SELECT internal_status, COUNT(*) as cnt FROM master_properties GROUP BY internal_status`
+    )),
+    safeAll<{ source_count: number; cnt: number }>(c.env.MAL_DB.prepare(
+      `SELECT source_count, COUNT(*) as cnt FROM master_properties GROUP BY source_count ORDER BY source_count`
+    )),
+  ]);
+
+  return c.json({
+    totalMasters: masterCount?.cnt ?? 0,
+    unlinkedProperties: unlinkedCount?.cnt ?? 0,
+    byInternalStatus: statusBreakdown.results,
+    bySourceCount: siteBreakdown.results,
+  });
+});
+
+// ─── POST /api/admin/master/:id/status ───────────────────────────────────────
+admin.post('/master/:id/status', async (c) => {
+  const id = c.req.param('id');
+  let body: { status?: string; agentId?: string; notes?: string };
+  try {
+    body = await c.req.json<{ status?: string; agentId?: string; notes?: string }>();
+  } catch {
+    return c.json({ error: 'JSON body required' }, 400);
+  }
+
+  const validStatuses = ['available', 'showing', 'contracted', 'sold'];
+  if (!body.status || !validStatuses.includes(body.status)) {
+    return c.json({ error: `status must be one of: ${validStatuses.join(', ')}` }, 400);
+  }
+
+  const result = await c.env.MAL_DB.prepare(`
+    UPDATE master_properties
+    SET internal_status = ?, agent_id = ?, internal_notes = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).bind(body.status, body.agentId ?? null, body.notes ?? null, id).run();
+
+  if ((result.meta?.changes as number | undefined) === 0) {
+    return c.json({ error: 'Master property not found' }, 404);
+  }
+
+  return c.json({ ok: true, id, status: body.status });
+});
+
+// ─── POST /api/admin/master/:id/favorite ─────────────────────────────────────
+admin.post('/master/:id/favorite', async (c) => {
+  const id = c.req.param('id');
+  let body: { favorite?: boolean };
+  try {
+    body = await c.req.json<{ favorite?: boolean }>();
+  } catch {
+    return c.json({ error: 'JSON body required' }, 400);
+  }
+
+  if (typeof body.favorite !== 'boolean') {
+    return c.json({ error: 'favorite must be a boolean' }, 400);
+  }
+
+  const result = await c.env.MAL_DB.prepare(`
+    UPDATE master_properties
+    SET favorite = ?, updated_at = datetime('now')
+    WHERE id = ?
+  `).bind(body.favorite ? 1 : 0, id).run();
+
+  if ((result.meta?.changes as number | undefined) === 0) {
+    return c.json({ error: 'Master property not found' }, 404);
+  }
+
+  return c.json({ ok: true, id, favorite: body.favorite });
 });
 
 export { admin };

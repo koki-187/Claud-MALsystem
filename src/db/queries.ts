@@ -1,5 +1,5 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import type { Property, SearchParams, SearchResult, ScrapeJob, SiteId } from '../types';
+import type { Property, SearchParams, SearchResult, ScrapeJob, SiteId, MasterProperty, MasterSearchResult, SourceListing } from '../types';
 
 export async function searchProperties(
   db: D1Database,
@@ -266,6 +266,204 @@ export async function logSearch(
     resultsCount,
     executionTimeMs
   ).run();
+}
+
+export async function searchMasters(
+  db: D1Database,
+  params: SearchParams,
+): Promise<MasterSearchResult> {
+  const startTime = Date.now();
+  const page = params.page ?? 1;
+  const limit = Math.min(params.limit ?? 20, 100);
+  const offset = (page - 1) * limit;
+
+  const whereClauses: string[] = ['m.internal_status != \'sold\''];
+  const bindings: (string | number)[] = [];
+
+  if (params.prefecture) {
+    whereClauses.push('m.prefecture = ?');
+    bindings.push(params.prefecture);
+  }
+  if (params.city) {
+    whereClauses.push('m.city LIKE ?');
+    bindings.push(`%${params.city}%`);
+  }
+  if (params.propertyType) {
+    whereClauses.push('m.property_type = ?');
+    bindings.push(params.propertyType);
+  }
+  if (params.priceMin !== undefined) {
+    whereClauses.push('m.price >= ?');
+    bindings.push(params.priceMin);
+  }
+  if (params.priceMax !== undefined) {
+    whereClauses.push('m.price <= ?');
+    bindings.push(params.priceMax);
+  }
+  if (params.areaMin !== undefined) {
+    whereClauses.push('m.area >= ?');
+    bindings.push(params.areaMin);
+  }
+  if (params.areaMax !== undefined) {
+    whereClauses.push('m.area <= ?');
+    bindings.push(params.areaMax);
+  }
+  if (params.rooms) {
+    whereClauses.push('m.rooms = ?');
+    bindings.push(params.rooms);
+  }
+  if (params.ageMax !== undefined) {
+    whereClauses.push('(m.age IS NULL OR m.age <= ?)');
+    bindings.push(params.ageMax);
+  }
+  if (params.stationMinutes !== undefined) {
+    whereClauses.push('(m.station_minutes IS NULL OR m.station_minutes <= ?)');
+    bindings.push(params.stationMinutes);
+  }
+  if (params.yieldMin !== undefined) {
+    whereClauses.push('m.yield_rate >= ?');
+    bindings.push(params.yieldMin);
+  }
+  if (params.query) {
+    whereClauses.push('(m.title LIKE ? OR m.address LIKE ? OR m.description LIKE ?)');
+    const q = `%${params.query}%`;
+    bindings.push(q, q, q);
+  }
+
+  const whereSQL = `WHERE ${whereClauses.join(' AND ')}`;
+
+  const sortMap: Record<string, string> = {
+    price_asc:   'm.price ASC NULLS LAST',
+    price_desc:  'm.price DESC NULLS LAST',
+    area_asc:    'm.area ASC NULLS LAST',
+    area_desc:   'm.area DESC NULLS LAST',
+    yield_desc:  'm.yield_rate DESC NULLS LAST',
+    newest:      'm.last_seen_at DESC',
+    relevance:   'm.last_seen_at DESC',
+  };
+  const orderSQL = sortMap[params.sortBy ?? 'newest'] ?? 'm.last_seen_at DESC';
+
+  const countResult = await db
+    .prepare(`SELECT COUNT(*) as total FROM master_properties m ${whereSQL}`)
+    .bind(...bindings)
+    .first<{ total: number }>();
+
+  const total = countResult?.total ?? 0;
+
+  const masterRows = await db
+    .prepare(`
+      SELECT m.*
+      FROM master_properties m
+      ${whereSQL}
+      ORDER BY ${orderSQL}
+      LIMIT ? OFFSET ?
+    `)
+    .bind(...bindings, limit, offset)
+    .all<Record<string, unknown>>();
+
+  const masterList = masterRows.results ?? [];
+  const masterIds = masterList.map(r => r.id as string);
+
+  // Fetch sources for all masters in one query
+  let sourcesMap = new Map<string, SourceListing[]>();
+  if (masterIds.length > 0) {
+    const placeholders = masterIds.map(() => '?').join(', ');
+    const sourceRows = await db
+      .prepare(`
+        SELECT p.master_id, p.site_id, p.site_property_id, p.detail_url,
+               p.thumbnail_url, p.price, p.scraped_at
+        FROM properties p
+        WHERE p.master_id IN (${placeholders})
+        ORDER BY p.scraped_at DESC
+      `)
+      .bind(...masterIds)
+      .all<{
+        master_id: string;
+        site_id: string;
+        site_property_id: string;
+        detail_url: string | null;
+        thumbnail_url: string | null;
+        price: number | null;
+        scraped_at: string;
+      }>();
+
+    for (const sr of (sourceRows.results ?? [])) {
+      const list = sourcesMap.get(sr.master_id) ?? [];
+      list.push({
+        siteId: sr.site_id as SiteId,
+        sitePropertyId: sr.site_property_id,
+        detailUrl: sr.detail_url || null,
+        thumbnailUrl: sr.thumbnail_url || null,
+        price: sr.price ?? null,
+        scrapedAt: sr.scraped_at,
+      });
+      sourcesMap.set(sr.master_id, list);
+    }
+  }
+
+  const masters: MasterProperty[] = masterList.map(row => rowToMaster(row, sourcesMap));
+
+  return {
+    masters,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+    executionTimeMs: Date.now() - startTime,
+    cacheHit: false,
+  };
+}
+
+function rowToMaster(row: Record<string, unknown>, sourcesMap: Map<string, SourceListing[]>): MasterProperty {
+  const id = row.id as string;
+  let sourceSites: SiteId[] = [];
+  try {
+    const parsed = JSON.parse((row.source_sites as string) ?? '[]');
+    if (Array.isArray(parsed)) sourceSites = parsed as SiteId[];
+  } catch { /* ignore */ }
+
+  return {
+    id,
+    fingerprint: row.fingerprint as string,
+    title: row.title as string,
+    propertyType: row.property_type as MasterProperty['propertyType'],
+    prefecture: row.prefecture as MasterProperty['prefecture'],
+    city: row.city as string,
+    address: (row.address as string) ?? null,
+    price: (row.price as number) ?? null,
+    area: (row.area as number) ?? null,
+    buildingArea: (row.building_area as number) ?? null,
+    landArea: (row.land_area as number) ?? null,
+    rooms: (row.rooms as string) ?? null,
+    age: (row.age as number) ?? null,
+    floor: (row.floor as number) ?? null,
+    totalFloors: (row.total_floors as number) ?? null,
+    station: (row.station as string) ?? null,
+    stationMinutes: (row.station_minutes as number) ?? null,
+    managementFee: (row.management_fee as number) ?? null,
+    repairFund: (row.repair_fund as number) ?? null,
+    direction: (row.direction as string) ?? null,
+    structure: (row.structure as string) ?? null,
+    yieldRate: (row.yield_rate as number) ?? null,
+    latitude: (row.latitude as number) ?? null,
+    longitude: (row.longitude as number) ?? null,
+    description: (row.description as string) ?? null,
+    sourceCount: (row.source_count as number) ?? 1,
+    sourceSites,
+    primarySourceId: (row.primary_source_id as string) ?? null,
+    primaryThumbnailUrl: (row.primary_thumbnail_url as string) ?? null,
+    primaryR2Key: (row.primary_r2_key as string) ?? null,
+    internalStatus: (row.internal_status as MasterProperty['internalStatus']) ?? 'available',
+    agentId: (row.agent_id as string) ?? null,
+    internalNotes: (row.internal_notes as string) ?? null,
+    favorite: (row.favorite as number) === 1,
+    viewCount: (row.view_count as number) ?? 0,
+    firstListedAt: (row.first_listed_at as string) ?? null,
+    lastSeenAt: (row.last_seen_at as string) ?? null,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+    sources: sourcesMap.get(id) ?? [],
+  };
 }
 
 function rowToProperty(row: Record<string, unknown>): Property {
