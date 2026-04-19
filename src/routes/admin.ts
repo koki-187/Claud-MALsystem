@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import type { Bindings } from '../types';
 import type { AdminStats, SiteId, PrefectureCode } from '../types';
 import { enqueueAll, processQueue } from '../services/image-pipeline';
+import { runScheduledScrape } from '../scrapers/aggregator';
 
 const admin = new Hono<{ Bindings: Bindings }>();
 
@@ -386,6 +387,18 @@ admin.get('/images/queue-status', async (c) => {
     counts[r.status] = r.cnt;
   }
   return c.json({ counts });
+});
+
+// ─── POST /api/admin/scrape ──────────────────────────────────────────────────
+// Manually trigger the scheduled scrape (same logic as cron, but on-demand).
+admin.post('/scrape', async (c) => {
+  try {
+    const result = await runScheduledScrape(c.env);
+    return c.json({ ok: true, ...result });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return c.json({ ok: false, error: msg }, 500);
+  }
 });
 
 // ─── DELETE /api/admin/sold-cleanup ──────────────────────────────────────────
