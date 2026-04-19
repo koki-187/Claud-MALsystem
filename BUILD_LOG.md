@@ -23,6 +23,23 @@
 
 ---
 
+## 2026-04-19 (Desktop)
+- **環境**: Desktop (Claude Code)
+- **ブランチ**: master
+- **コミット**: `67e745d`
+- **変更内容**: Phase 2 — HOME'Sスクレイパー全面書換 (commit 67e745d)
+  - `src/scrapers/homes.ts` 全面書換: mockフォールバック廃止、JSON-LD優先 → CSSセレクタfallback の2段構え (SUUMOと同パターン)
+  - `parseFromJsonLd` / `parseFromDom` / `jsonLdNodeToPartial` 追加
+  - 画像URL抽出: og:image (ページレベル) + カード内 `<img>` src 収集
+  - `tests/fixtures/homes-listings.html` 新規作成 (JSON-LD 2件 + CSSカード 2件)
+  - `tests/scrapers/homes.test.ts` 新規作成 (24テスト全PASS)
+- **TypeScript**: `tsc --noEmit` ゼロエラー
+- **テスト**: 24/24 PASS
+- **デプロイ**: 未 (wrangler deployはデスクトップ環境で実行)
+- **次のタスク**: 次サイト書換推奨 → **AtHome** (`src/scrapers/athome.ts`) — 同パターンで横展開
+
+---
+
 ## 2026-04-12 10:46 (Desktop)
 - **環境**: Desktop (Claude Code)
 - **ブランチ**: master
