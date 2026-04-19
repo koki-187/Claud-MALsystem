@@ -7,16 +7,40 @@ import {
   findJsonLdByType,
 } from '../parsers/html-parser';
 
+/** Map prefecture code → CHINTAI prefecture slug */
+const CHINTAI_PREF_SLUG: Partial<Record<PrefectureCode, string>> = {
+  '01': 'hokkaido',   '02': 'aomori',    '03': 'iwate',    '04': 'miyagi',
+  '05': 'akita',      '06': 'yamagata',  '07': 'fukushima','08': 'ibaraki',
+  '09': 'tochigi',    '10': 'gunma',     '11': 'saitama',  '12': 'chiba',
+  '13': 'tokyo',      '14': 'kanagawa',  '15': 'niigata',  '16': 'toyama',
+  '17': 'ishikawa',   '18': 'fukui',     '19': 'yamanashi','20': 'nagano',
+  '21': 'gifu',       '22': 'shizuoka',  '23': 'aichi',    '24': 'mie',
+  '25': 'shiga',      '26': 'kyoto',     '27': 'osaka',    '28': 'hyogo',
+  '29': 'nara',       '30': 'wakayama',  '31': 'tottori',  '32': 'shimane',
+  '33': 'okayama',    '34': 'hiroshima', '35': 'yamaguchi','36': 'tokushima',
+  '37': 'kagawa',     '38': 'ehime',     '39': 'kochi',    '40': 'fukuoka',
+  '41': 'saga',       '42': 'nagasaki',  '43': 'kumamoto', '44': 'oita',
+  '45': 'miyazaki',   '46': 'kagoshima', '47': 'okinawa',
+};
+
 export class ChintaiScraper extends BaseScraper {
   constructor() {
-    super('chintai');
+    super('chintai', {
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    });
   }
 
   async scrapeListings(ctx: ScrapeContext): Promise<Property[]> {
     const page = ctx.page ?? 1;
     // CHINTAI 賃貸マンション一覧 URL
-    const url =
-      `https://www.chintai.net/rent/search/?prefecture_cd=${ctx.prefecture}&page=${page}`;
+    // 形式: /{slug}/area/{prefCode}01/list/ — 都道府県の主要エリア(01)の一覧
+    const slug = CHINTAI_PREF_SLUG[ctx.prefecture];
+    if (!slug) return [];
+    // Area code = prefecture code (zero-padded to 2 digits) + "101" (main area)
+    const areaCode = `${ctx.prefecture}101`;
+    const url = page > 1
+      ? `https://www.chintai.net/${slug}/area/${areaCode}/list/?page=${page}`
+      : `https://www.chintai.net/${slug}/area/${areaCode}/list/`;
 
     const html = await this.fetchHtml(url);
     if (!html) return [];
@@ -153,13 +177,12 @@ export class ChintaiScraper extends BaseScraper {
 
     const properties: Property[] = [];
 
-    // CHINTAI 一覧ページの物件カードセレクタ候補
+    // CHINTAI 一覧ページ: .cassette_item.build が各建物カード
+    // DOM: <div class="cassette_item build"> → .cassette_ttl h2 / .cassette_inner / .cassette_detail
     const cardSelectors = [
-      '.property-cassette',          // 新スタイルカード
-      '.cassette__inner',            // 旧スタイル
-      '[data-property-id]',          // data属性ベース
-      '.chintai-item',               // サイト固有
-      '.iRoom__item',                // ルーム一覧
+      '.cassette_item',              // CHINTAI現行 (build / item_pr クラスが付く)
+      '.l_cassette',                 // 別スタイルのカード包括
+      '.property-cassette',          // フォールバック旧スタイル
     ];
 
     let cards: Element[] = [];
@@ -181,84 +204,64 @@ export class ChintaiScraper extends BaseScraper {
   }
 
   private cardToProperty(card: Element, prefecture: PrefectureCode): Property | null {
-    // Title & detail URL
-    const linkEl =
-      card.querySelector('h2 a') ??
-      card.querySelector('h3 a') ??
-      card.querySelector('.property-name a') ??
-      card.querySelector('.cassette__name a') ??
-      card.querySelector('a[href*="/rent/"]') ??
-      card.querySelector('a[href*="/chintai/"]') ??
-      card.querySelector('a');
-
-    const href = linkEl?.getAttribute('href') ?? '';
-    const titleText =
-      linkEl?.textContent?.trim() ??
-      card.querySelector('[class*="name"]')?.textContent?.trim() ??
-      card.querySelector('[class*="title"]')?.textContent?.trim() ?? '';
+    // Title — .cassette_ttl h2 (inner span の型バッジを除いたテキスト)
+    const titleH2 = card.querySelector('.cassette_ttl h2') ?? card.querySelector('h2');
+    // Remove type badge spans and get text
+    const titleText = titleH2
+      ? (Array.from(titleH2.childNodes)
+          .filter(n => n.nodeType === 3)  // text nodes only
+          .map(n => n.textContent?.trim())
+          .filter(Boolean)
+          .join(' ')
+          .trim()
+        || (titleH2.textContent?.replace(/\s+/g, ' ').trim() ?? ''))
+      : '';
     if (!titleText) return null;
 
-    const detailUrl = href.startsWith('http') ? href : `https://www.chintai.net${href}`;
+    // Detail URL — from data-detailurl on tbody, or fallback to direct link
+    const detailurlEl = card.querySelector('[data-detailurl]');
+    const detailPath = detailurlEl?.getAttribute('data-detailurl') ??
+      card.querySelector('a[href*="/detail/"]')?.getAttribute('href') ?? '';
+    if (!detailPath) return null;
+    const detailUrl = detailPath.startsWith('http') ? detailPath : `https://www.chintai.net${detailPath}`;
     const sitePropertyId = this.idFromUrl(detailUrl);
 
-    // Rent — CHINTAI shows monthly rent
-    const rentText = this.firstText(card, [
-      '.property-rent',
-      '.cassette__price',
-      '[class*="rent"]',
-      '[class*="price"]',
-      '[class*="kakaku"]',
-    ]) ?? '';
-    // Try 万円/月 format first, then 万円 generic
-    const rentMonthMatch = rentText.match(/(\d+(?:\.\d+)?)\s*万円\/月/);
-    const rent = rentMonthMatch
-      ? Math.round(parseFloat(rentMonthMatch[1]))
-      : this.extractPrice(rentText).price;
-    const priceText = rent ? `家賃${rent}万円/月` : '要問合せ';
+    // Rent — CHINTAI shows "27.2万円 18,000円" in td.price
+    const priceTd = card.querySelector('td.price');
+    const priceTdText = priceTd?.textContent?.trim() ?? '';
+    // Extract first 万円 value (monthly rent)
+    const rentManMatch = priceTdText.match(/(\d+(?:\.\d+)?)\s*万円/);
+    const rent = rentManMatch ? Math.round(parseFloat(rentManMatch[1]) * 10) / 10 : null;
+    const rentInt = rent !== null ? Math.round(rent) : null;
+    const priceText = rentInt ? `家賃${rent}万円/月` : '要問合せ';
 
-    // Area
-    const areaText = this.firstText(card, [
-      '.property-area',
-      '[class*="area"]',
-      '[class*="menseki"]',
-    ]) ?? '';
-    const area = this.extractArea(areaText);
-
-    // Rooms
-    const roomsText = this.firstText(card, [
-      '.property-madori',
-      '[class*="madori"]',
-      '[class*="rooms"]',
-      '[class*="layout"]',
-    ]) ?? '';
-    const rooms = roomsText.match(/(\d[LDKS1-9][DKSR]*)/)?.[1] ?? null;
+    // Area & Rooms — from td.layout "2DK / 35.82㎡"
+    const layoutTd = card.querySelector('td.layout') ?? card.querySelector('.layout');
+    const layoutText = layoutTd?.textContent?.trim() ?? card.textContent ?? '';
+    const area = this.extractArea(layoutText);
+    const rooms = layoutText.match(/([1-9][LDKS][DKSR]*)/)?.[1] ?? null;
 
     // Station
-    const stationText = this.firstText(card, [
-      '.property-station',
-      '[class*="station"]',
-      '[class*="route"]',
-      '[class*="traffic"]',
-      '[class*="ensen"]',
-    ]) ?? card.textContent ?? '';
-    const { station, stationMinutes } = this.extractStation(stationText);
+    const trafficEl = card.querySelector('td.traffic') ?? card.querySelector('.traffic');
+    const { station, stationMinutes } = this.extractStation(trafficEl?.textContent ?? card.textContent ?? '');
 
     // Age
     const age = this.extractAge(card.textContent ?? '');
 
     // City / address
-    const addrText = this.firstText(card, [
-      '.property-address',
-      '[class*="address"]',
-      '[class*="location"]',
-      '[class*="chiiki"]',
-    ]) ?? '';
-    const city = addrText.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+    const addressTd = card.querySelector('td');
+    const city = (addressTd?.textContent ?? card.textContent ?? '').match(/([^\s　]+[市区町村])/)?.[1] ?? '';
 
-    // Images — og:image fallback not used at card level
+    // Images — CHINTAI uses lazy loading: data-original="//img.chintai.net/..."
     const imgSrcs = Array.from(card.querySelectorAll('img'))
-      .map(img => img.getAttribute('src') ?? '')
-      .filter(s => s.startsWith('http') && !s.match(/(?:logo|icon|sprite|blank|pixel)/i))
+      .map(img =>
+        img.getAttribute('data-original') ??
+        img.getAttribute('data-src') ??
+        img.getAttribute('src') ??
+        ''
+      )
+      .map(s => s.startsWith('//') ? 'https:' + s : s)
+      .filter(s => s.startsWith('http') && !s.match(/(?:logo|icon|sprite|blank|pixel|data:)/i))
       .slice(0, 10);
 
     const thumbnailUrl = imgSrcs[0] ?? null;
@@ -268,7 +271,7 @@ export class ChintaiScraper extends BaseScraper {
     const direction = this.extractDirection(cardText);
     const structure = this.extractStructure(cardText);
 
-    const fingerprint = this.computeFingerprint({ prefecture, city, price: rent, area, rooms });
+    const fingerprint = this.computeFingerprint({ prefecture, city, price: rentInt, area, rooms });
 
     return this.buildBaseProperty({
       sitePropertyId,
@@ -277,7 +280,7 @@ export class ChintaiScraper extends BaseScraper {
       prefecture,
       city,
       detailUrl,
-      price: rent,
+      price: rentInt,
       priceText,
       area,
       rooms,
@@ -304,6 +307,10 @@ export class ChintaiScraper extends BaseScraper {
   }
 
   private idFromUrl(url: string): string {
+    // CHINTAI detail URLs: /detail/bk-{alphanumeric}/
+    const bk = url.match(/\/bk-([A-Za-z0-9]+)\//);
+    if (bk) return bk[1].slice(-24); // up to 24 chars
+    // Generic numeric ID fallback
     const m = url.match(/\/(\d{6,})\//);
     if (m) return m[1];
     return btoa(encodeURIComponent(url.replace(/https?:\/\/[^/]+/, ''))).slice(0, 24);

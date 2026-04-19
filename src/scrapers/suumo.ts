@@ -9,7 +9,9 @@ import {
 
 export class SuumoScraper extends BaseScraper {
   constructor() {
-    super('suumo');
+    super('suumo', {
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    });
   }
 
   async scrapeListings(ctx: ScrapeContext): Promise<Property[]> {
@@ -183,69 +185,69 @@ export class SuumoScraper extends BaseScraper {
   }
 
   private cardToProperty(card: Element, _fullHtml: string, prefecture: PrefectureCode): Property | null {
-    // Title & detail URL — try multiple selector patterns
+    // Title & detail URL — SUUMO uses .property_unit-title a
     const linkEl =
-      card.querySelector('.cassette_title a') ??
       card.querySelector('.property_unit-title a') ??
+      card.querySelector('.cassette_title a') ??
       card.querySelector('h2 a') ??
       card.querySelector('h3 a') ??
-      card.querySelector('a[href*="/ms/mansion/"]') ??
+      card.querySelector('a[href*="/ms/"]') ??
       card.querySelector('a[href*="/jj/bukken/"]') ??
       card.querySelector('a');
 
     const href = linkEl?.getAttribute('href') ?? '';
-    const titleText = linkEl?.textContent?.trim() ?? card.querySelector('.cassette_title')?.textContent?.trim() ?? '';
+    const titleText = linkEl?.textContent?.trim() ?? card.querySelector('.property_unit-title')?.textContent?.trim() ?? '';
     if (!titleText) return null;
 
     const detailUrl = href.startsWith('http') ? href : `https://suumo.jp${href}`;
     const sitePropertyId = this.idFromUrl(detailUrl);
 
-    // Price — try several patterns
+    // Price — SUUMO uses .dottable-value span for price
     const priceText = this.firstText(card, [
+      '.dottable-value',
       '.cassette_price',
       '.property_unit-price',
-      '[class*="price"]',
-      '.dottable-value',
     ]) ?? '';
     const { price, priceText: priceLabel } = this.extractPrice(priceText);
 
-    // Area
-    const areaText = this.firstText(card, [
-      '.cassette_area',
-      '[class*="area"]',
-      '.dottable-value',
-    ]) ?? '';
+    // Area — in .dottable-fix table (㎡ text)
+    const cardText = card.textContent ?? '';
+    const areaText = cardText;
     const area = this.extractArea(areaText);
 
-    // Rooms
-    const roomsText = this.firstText(card, [
-      '.cassette_madori',
-      '[class*="madori"]',
-      '[class*="rooms"]',
-    ]) ?? '';
-    const rooms = roomsText.match(/(\d[LDKS1-9][DKSR]*)/)?.[1] ?? null;
+    // Rooms — look for LDK pattern in card text
+    const rooms = cardText.match(/(\d[LDKS][DKSR]*)/)?.[1] ?? null;
 
-    // Station
+    // Station — "駅 徒歩X分" pattern
     const stationText = this.firstText(card, [
-      '.cassette_route',
-      '[class*="route"]',
-      '[class*="station"]',
-      '[class*="ensen"]',
-    ]) ?? card.textContent ?? '';
+      '.dottable-line',
+    ]) ?? cardText;
     const { station, stationMinutes } = this.extractStation(stationText);
 
-    // City / address
+    // City / address — dottable-line contains address
     const addrText = this.firstText(card, [
-      '.cassette_address',
-      '[class*="address"]',
-      '[class*="location"]',
+      '.dottable-line',
     ]) ?? '';
     const city = addrText.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
 
-    // Images — collect img[src] within card (avoid ownerDocument null issue)
+    // Images — SUUMO uses lazy loading: real URL in `rel` attribute or `data-src`
     const imgSrcs = Array.from(card.querySelectorAll('img'))
-      .map(img => img.getAttribute('src') ?? '')
-      .filter(s => s.startsWith('http') && !s.match(/(?:logo|icon|sprite|blank|pixel)/i))
+      .map(img =>
+        img.getAttribute('rel') ??
+        img.getAttribute('data-src') ??
+        img.getAttribute('data-original') ??
+        img.getAttribute('src') ??
+        ''
+      )
+      .map(s => {
+        // SUUMO image URLs in rel may be relative paths like "gazo/bukken/..."
+        if (s.startsWith('http')) return s;
+        if (s.startsWith('//')) return 'https:' + s;
+        if (s.startsWith('/')) return 'https://suumo.jp' + s;
+        if (s.startsWith('gazo/') || s.startsWith('img/')) return 'https://img01.suumo.com/jj/resizeImage?src=' + s;
+        return '';
+      })
+      .filter(s => s.startsWith('http') && !s.match(/(?:logo|icon|sprite|blank|pixel|data:)/i))
       .slice(0, 10);
 
     const thumbnailUrl = imgSrcs[0] ?? null;

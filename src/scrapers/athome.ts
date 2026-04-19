@@ -7,16 +7,37 @@ import {
   findJsonLdByType,
 } from '../parsers/html-parser';
 
+/** Map prefecture code → AtHome prefecture slug (e.g. '13' → 'tokyo') */
+const ATHOME_PREF_SLUG: Partial<Record<PrefectureCode, string>> = {
+  '01': 'hokkaido',  '02': 'aomori',   '03': 'iwate',   '04': 'miyagi',
+  '05': 'akita',     '06': 'yamagata', '07': 'fukushima','08': 'ibaraki',
+  '09': 'tochigi',   '10': 'gunma',    '11': 'saitama',  '12': 'chiba',
+  '13': 'tokyo',     '14': 'kanagawa', '15': 'niigata',  '16': 'toyama',
+  '17': 'ishikawa',  '18': 'fukui',    '19': 'yamanashi','20': 'nagano',
+  '21': 'gifu',      '22': 'shizuoka', '23': 'aichi',    '24': 'mie',
+  '25': 'shiga',     '26': 'kyoto',    '27': 'osaka',    '28': 'hyogo',
+  '29': 'nara',      '30': 'wakayama', '31': 'tottori',  '32': 'shimane',
+  '33': 'okayama',   '34': 'hiroshima','35': 'yamaguchi','36': 'tokushima',
+  '37': 'kagawa',    '38': 'ehime',    '39': 'kochi',    '40': 'fukuoka',
+  '41': 'saga',      '42': 'nagasaki', '43': 'kumamoto', '44': 'oita',
+  '45': 'miyazaki',  '46': 'kagoshima','47': 'okinawa',
+};
+
 export class AthomeScraper extends BaseScraper {
   constructor() {
-    super('athome');
+    super('athome', {
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    });
   }
 
   async scrapeListings(ctx: ScrapeContext): Promise<Property[]> {
     const page = ctx.page ?? 1;
-    // AtHome 中古マンション一覧 URL
-    const url =
-      `https://www.athome.co.jp/mansion/chuko/list/?PREF_CD=${ctx.prefecture}&page=${page}`;
+    // AtHome 中古マンション一覧 URL — uses prefecture slug
+    const slug = ATHOME_PREF_SLUG[ctx.prefecture];
+    if (!slug) return [];
+    const url = page > 1
+      ? `https://www.athome.co.jp/mansion/chuko/${slug}/list/?page=${page}`
+      : `https://www.athome.co.jp/mansion/chuko/${slug}/list/`;
 
     const html = await this.fetchHtml(url);
     if (!html) return [];
@@ -153,13 +174,13 @@ export class AthomeScraper extends BaseScraper {
 
     const properties: Property[] = [];
 
-    // AtHome 一覧ページの物件カードセレクタ候補
+    // AtHome 一覧ページ: Angular SSR 出力
+    // カードは .card-box クラスを持つ <div>
     const cardSelectors = [
-      '.property-list-item',         // 新スタイル article
-      '.item-property',              // 旧スタイル
+      '.card-box',                   // AtHome 現行スタイル (Angular SSR)
+      '.property-list-item',         // 旧スタイル
       '[data-property-id]',          // data属性ベース
       '.bukken-cassette',            // 共通スタイル
-      'article',                     // フォールバック
     ];
 
     let cards: Element[] = [];
@@ -181,82 +202,62 @@ export class AthomeScraper extends BaseScraper {
   }
 
   private cardToProperty(card: Element, prefecture: PrefectureCode): Property | null {
-    // Title & detail URL
+    // Title & detail URL — AtHome uses .title-wrap__title-text for title, direct <a> for link
     const linkEl =
-      card.querySelector('.property-name a') ??
-      card.querySelector('.bukken-name a') ??
-      card.querySelector('h2 a') ??
-      card.querySelector('h3 a') ??
       card.querySelector('a[href*="/mansion/"]') ??
       card.querySelector('a[href*="/chuko/"]') ??
       card.querySelector('a');
 
     const href = linkEl?.getAttribute('href') ?? '';
-    const titleText =
-      linkEl?.textContent?.trim() ??
-      card.querySelector('[class*="name"]')?.textContent?.trim() ??
-      card.querySelector('[class*="title"]')?.textContent?.trim() ?? '';
-    if (!titleText) return null;
+    // Strip query params for clean detail URL
+    const cleanHref = href.split('?')[0];
+    const titleEl =
+      card.querySelector('.title-wrap__title-text') ??
+      card.querySelector('.property-name') ??
+      card.querySelector('h2') ??
+      card.querySelector('h3');
+    // title-wrap__title-text may contain a <p> with price — get first text node
+    const titleText = (titleEl?.firstChild?.textContent?.trim()) ||
+      titleEl?.textContent?.replace(/\d+万円.*/, '').trim() || '';
+    if (!titleText || !cleanHref) return null;
 
-    const detailUrl = href.startsWith('http') ? href : `https://www.athome.co.jp${href}`;
+    const detailUrl = cleanHref.startsWith('http') ? cleanHref : `https://www.athome.co.jp${cleanHref}`;
     const sitePropertyId = this.idFromUrl(detailUrl);
 
-    // Price
-    const priceText = this.firstText(card, [
-      '.property-price',
-      '[class*="price"]',
-      '.kakaku',
-    ]) ?? '';
-    const { price, priceText: priceLabel } = this.extractPrice(priceText);
+    // Price — .property-price contains "120万円" style text
+    const rawPriceText = card.querySelector('.property-price')?.textContent?.trim() ?? '';
+    // Extract 万円 amount (digits before 万円 span)
+    const priceNumMatch = rawPriceText.match(/(\d+(?:\.\d+)?)/);
+    const priceManValue = priceNumMatch ? parseFloat(priceNumMatch[1]) : null;
+    const priceText2 = rawPriceText || '';
+    const { price, priceText: priceLabel } = priceManValue
+      ? { price: Math.round(priceManValue), priceText: `${Math.round(priceManValue)}万円` }
+      : this.extractPrice(priceText2);
 
-    // Area
-    const areaText = this.firstText(card, [
-      '.property-area',
-      '[class*="area"]',
-      '[class*="menseki"]',
-    ]) ?? '';
-    const area = this.extractArea(areaText);
-
-    // Rooms
-    const roomsText = this.firstText(card, [
-      '.property-madori',
-      '[class*="madori"]',
-      '[class*="rooms"]',
-      '[class*="layout"]',
-    ]) ?? '';
-    const rooms = roomsText.match(/(\d[LDKS1-9][DKSR]*)/)?.[1] ?? null;
+    // Area & Rooms — from card text content
+    const cardText = card.textContent ?? '';
+    const area = this.extractArea(cardText);
+    const rooms = (this.firstText(card, ['.property-madori', '[class*="madori"]'])
+      ?.match(/(\d[LDKS][DKSR]*)/)?.[1]) ??
+      cardText.match(/(\d[LDKS][DKSR]*)/)?.[1] ?? null;
 
     // Station
-    const stationText = this.firstText(card, [
-      '.property-station',
-      '[class*="station"]',
-      '[class*="route"]',
-      '[class*="traffic"]',
-      '[class*="ensen"]',
-    ]) ?? card.textContent ?? '';
-    const { station, stationMinutes } = this.extractStation(stationText);
+    const { station, stationMinutes } = this.extractStation(cardText);
 
     // Age
-    const age = this.extractAge(card.textContent ?? '');
+    const age = this.extractAge(cardText);
 
     // City / address
-    const addrText = this.firstText(card, [
-      '.property-address',
-      '[class*="address"]',
-      '[class*="location"]',
-      '[class*="chiiki"]',
-    ]) ?? '';
-    const city = addrText.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+    const city = cardText.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
 
-    // Images
+    // Images — AtHome uses real src for SSR-rendered images
     const imgSrcs = Array.from(card.querySelectorAll('img'))
       .map(img => img.getAttribute('src') ?? '')
+      .map(s => s.startsWith('//') ? 'https:' + s : s)
       .filter(s => s.startsWith('http') && !s.match(/(?:logo|icon|sprite|blank|pixel)/i))
       .slice(0, 10);
 
     const thumbnailUrl = imgSrcs[0] ?? null;
-
-    const cardText = card.textContent ?? '';
     const managementFee = this.extractMonthlyFee(cardText, '管理費');
     const repairFund = this.extractMonthlyFee(cardText, '修繕積立金');
     const direction = this.extractDirection(cardText);
@@ -272,7 +273,7 @@ export class AthomeScraper extends BaseScraper {
       city,
       detailUrl,
       price,
-      priceText: priceLabel || priceText,
+      priceText: priceLabel,
       area,
       rooms,
       age,
