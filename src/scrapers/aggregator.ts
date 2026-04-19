@@ -47,10 +47,22 @@ function createScrapers(): Record<SiteId, BaseScraper> {
 }
 
 /**
- * Guard: if every property ID contains "mock_" this is pure mock data.
- * In that case we skip DB writes and sold-detection to avoid poisoning the DB.
+ * Guard: returns true when ALL properties are mock data (every ID contains "mock_").
+ * Empty arrays are treated as mock to avoid empty DB writes.
+ * @deprecated Prefer isMockData() for per-site checks.
  */
 function isAllMockData(properties: Property[]): boolean {
+  if (properties.length === 0) return true;
+  return properties.every(p => p.sitePropertyId.includes('mock_'));
+}
+
+/**
+ * Per-site mock guard: returns true when this site's result is pure mock data.
+ * Unlike isAllMockData, this evaluates a single site's slice rather than the
+ * combined multi-site batch — allowing DB writes as soon as any one site returns
+ * real data.
+ */
+function isMockData(properties: Property[]): boolean {
   if (properties.length === 0) return true;
   return properties.every(p => p.sitePropertyId.includes('mock_'));
 }
@@ -187,8 +199,9 @@ export async function runScheduledScrape(env: Bindings): Promise<{
           new Promise<never>((_, r) => setTimeout(() => r(new Error('timeout')), SCRAPER_TIMEOUT_MS)),
         ]);
 
-        // ── Mock guard ────────────────────────────────────────────────────────
-        if (isAllMockData(properties)) {
+        // ── Per-site mock guard ───────────────────────────────────────────────
+        // Skip DB write only for THIS site's mock data; other sites proceed.
+        if (isMockData(properties)) {
           await env.MAL_DB.prepare(
             `UPDATE scrape_jobs SET status = 'skipped_mock', completed_at = datetime('now') WHERE id = ?`
           ).bind(jobId).run();

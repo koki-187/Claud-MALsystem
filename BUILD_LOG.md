@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-04-19 (Desktop)
+- **環境**: Desktop (Claude Code)
+- **ブランチ**: master
+- **変更内容**: Phase 2 PoC完成 — linkedom導入 + SUUMOスクレイパーHTMLパーサー書換
+  - `linkedom ^0.18.12` を dependencies に追加 (package.json)
+  - `src/parsers/html-parser.ts` 新規作成: linkedomラッパー、extractJsonLd、findJsonLdByType、querySelectorヘルパー群
+  - `src/scrapers/base.ts` 拡張: `parseDocument()` / `extractFromJsonLd()` protected メソッド追加、Schema.org ノード変換ロジック実装
+  - `src/scrapers/suumo.ts` 全面書換: JSON-LD優先パース → CSSセレクタfallback の2段構え、mockフォールバック廃止
+  - `src/scrapers/aggregator.ts` ガード改善: `isAllMockData()` (全サイト一括判定) に加え `isMockData()` (サイト別判定) を追加、scheduledScrapeをサイト別判定に切替
+  - `tests/fixtures/suumo-listings.html` テストフィクスチャ新規作成
+  - `tests/scrapers/suumo.test.ts` テスト新規作成 (13テスト全PASS)
+- **デプロイ**: 未 (デスクトップ環境でwrangler deployが必要)
+- **TypeScript**: `tsc --noEmit` ゼロエラー
+- **テスト**: 13/13 PASS
+- **次のタスク**: 次サイト書換推奨 → **HOME'S** (`src/scrapers/homes.ts`) — 物件数が多くJSON-LDを出力している可能性が高い
+
+---
+
 ## 2026-04-12 10:46 (Desktop)
 - **環境**: Desktop (Claude Code)
 - **ブランチ**: master

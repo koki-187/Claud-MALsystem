@@ -9,7 +9,8 @@
     "deploy": "wrangler pages deploy dist",
     "db:migrate": "wrangler d1 migrations apply MAL_DB",
     "db:seed": "wrangler d1 execute MAL_DB --file=./migrations/seed.sql",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test": "tsx tests/scrapers/suumo.test.ts"
   },
   "dependencies": {
     "hono": "^4.6.3",

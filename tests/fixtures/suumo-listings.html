@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>SUUMO | マンション一覧</title>
+  <!-- JSON-LD structured data (primary parse path) -->
+  <script type="application/ld+json">
+  [
+    {
+      "@context": "https://schema.org",
+      "@type": "RealEstateListing",
+      "name": "港区タワーマンション 高層階 3LDK",
+      "description": "港区の人気エリアに位置するタワーマンション。眺望良好。",
+      "url": "https://suumo.jp/ms/mansion/tokyo/sc_minato/nc_123456789/",
+      "offers": {
+        "@type": "Offer",
+        "price": 158000000,
+        "priceCurrency": "JPY"
+      },
+      "floorSize": {
+        "@type": "QuantitativeValue",
+        "value": 85.5,
+        "unitCode": "MTK"
+      },
+      "geo": {
+        "@type": "GeoCoordinates",
+        "latitude": 35.6627,
+        "longitude": 139.7320
+      },
+      "address": {
+        "@type": "PostalAddress",
+        "addressLocality": "港区",
+        "streetAddress": "六本木1丁目"
+      },
+      "image": [
+        "https://cdn.suumo.jp/property/123456789/main.jpg",
+        "https://cdn.suumo.jp/property/123456789/room1.jpg"
+      ]
+    },
+    {
+      "@context": "https://schema.org",
+      "@type": "RealEstateListing",
+      "name": "新宿区マンション 2LDK リノベーション済",
+      "url": "https://suumo.jp/ms/mansion/tokyo/sc_shinjuku/nc_987654321/",
+      "offers": {
+        "@type": "Offer",
+        "price": 85000000,
+        "priceCurrency": "JPY"
+      },
+      "floorSize": {
+        "@type": "QuantitativeValue",
+        "value": 62.3,
+        "unitCode": "MTK"
+      },
+      "address": {
+        "@type": "PostalAddress",
+        "addressLocality": "新宿区",
+        "streetAddress": "新宿2丁目"
+      },
+      "image": "https://cdn.suumo.jp/property/987654321/main.jpg"
+    }
+  ]
+  </script>
+</head>
+<body>
+  <div id="js-bukkenList">
+    <!-- CSS selector fallback cards (used when JSON-LD absent) -->
+    <div class="cassette_inner">
+      <dt class="cassette_title">
+        <a href="/ms/mansion/tokyo/sc_minato/nc_111111111/">渋谷区デザイナーズ 1LDK</a>
+      </dt>
+      <div class="cassette_price">7,200万円</div>
+      <div class="cassette_area">48.00m²</div>
+      <div class="cassette_madori">1LDK</div>
+      <div class="cassette_route">渋谷駅 徒歩7分</div>
+      <div class="cassette_address">渋谷区</div>
+      <div class="cassette_img">
+        <img src="https://cdn.suumo.jp/property/111111111/main.jpg" alt="物件写真">
+      </div>
+    </div>
+    <div class="cassette_inner">
+      <dt class="cassette_title">
+        <a href="/ms/mansion/tokyo/sc_koto/nc_222222222/">江東区ファミリーマンション 3LDK</a>
+      </dt>
+      <div class="cassette_price">管理費：12,000円 5,500万円</div>
+      <div class="cassette_area">72.50m²</div>
+      <div class="cassette_madori">3LDK</div>
+      <div class="cassette_route">豊洲駅 徒歩5分</div>
+      <div class="cassette_address">江東区</div>
+      <div class="cassette_img">
+        <img src="https://cdn.suumo.jp/property/222222222/main.jpg" alt="物件写真">
+      </div>
+    </div>
+  </div>
+</body>
+</html>

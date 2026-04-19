@@ -1,5 +1,11 @@
 import type { SiteId, Property, PrefectureCode } from '../types';
 import { SITES } from '../types';
+import {
+  parseDocument as _parseDocument,
+  extractJsonLd,
+  findJsonLdByType,
+  type ParsedDocument,
+} from '../parsers/html-parser';
 
 export interface ScraperOptions {
   maxRetries?: number;
@@ -188,6 +194,91 @@ export abstract class BaseScraper {
     if (/新築/.test(text)) return 0;
     const m = text.match(/築(\d+)年/);
     return m ? parseInt(m[1]) : null;
+  }
+
+  /**
+   * Parse raw HTML into a linkedom Document.
+   * Returns null on failure — never throws.
+   */
+  protected parseDocument(html: string): ParsedDocument | null {
+    return _parseDocument(html);
+  }
+
+  /**
+   * Extract Schema.org RealEstateListing / Product entries from JSON-LD blocks.
+   * Returns partial Property objects derived from structured data.
+   * Falls back to empty array when no JSON-LD is present.
+   */
+  protected extractFromJsonLd(html: string): Partial<Property>[] {
+    const doc = _parseDocument(html);
+    if (!doc) return [];
+    const items = extractJsonLd(doc);
+    const nodes = findJsonLdByType(
+      items,
+      'RealEstateListing',
+      'Product',
+      'Place',
+      'Apartment',
+      'House',
+      'SingleFamilyResidence',
+    );
+    return nodes.map(node => this.jsonLdNodeToProperty(node));
+  }
+
+  private jsonLdNodeToProperty(node: Record<string, unknown>): Partial<Property> {
+    const partial: Partial<Property> = {};
+
+    // Name / title
+    if (typeof node['name'] === 'string') partial.title = node['name'];
+
+    // Description
+    if (typeof node['description'] === 'string') partial.description = node['description'];
+
+    // Price
+    const offer = node['offers'];
+    if (offer && typeof offer === 'object' && !Array.isArray(offer)) {
+      const o = offer as Record<string, unknown>;
+      const rawPrice = o['price'];
+      if (rawPrice !== undefined) {
+        const p = parseFloat(String(rawPrice));
+        if (!isNaN(p)) {
+          // JSON-LD prices are typically in JPY units; convert to 万円
+          partial.price = p >= 100000 ? Math.round(p / 10000) : p;
+          partial.priceText = `${partial.price.toLocaleString()}万円`;
+        }
+      }
+    }
+
+    // URL
+    if (typeof node['url'] === 'string') partial.detailUrl = node['url'];
+
+    // Geo
+    const geo = node['geo'];
+    if (geo && typeof geo === 'object' && !Array.isArray(geo)) {
+      const g = geo as Record<string, unknown>;
+      if (typeof g['latitude'] === 'number') partial.latitude = g['latitude'];
+      if (typeof g['longitude'] === 'number') partial.longitude = g['longitude'];
+    }
+
+    // Floor size / area
+    const floorSize = node['floorSize'];
+    if (floorSize && typeof floorSize === 'object' && !Array.isArray(floorSize)) {
+      const fs = floorSize as Record<string, unknown>;
+      const val = parseFloat(String(fs['value']));
+      if (!isNaN(val)) partial.area = val;
+    }
+
+    // Image
+    const img = node['image'];
+    if (typeof img === 'string') {
+      partial.thumbnailUrl = img;
+      partial.images = [img];
+    } else if (Array.isArray(img) && img.length > 0) {
+      partial.thumbnailUrl = String(img[0]);
+      partial.images = img.slice(0, 10).map(String);
+    }
+
+    return partial;
   }
 
   protected generateId(sitePropertyId: string): string {
