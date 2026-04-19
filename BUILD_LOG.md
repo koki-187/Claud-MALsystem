@@ -5,6 +5,54 @@
 
 ---
 
+## 2026-04-19 15:10 (Desktop) — 統一UI + マイソク印刷 + 画像パイプライン
+
+- **環境**: Desktop (Claude Code)
+- **ブランチ**: master
+- **コミット**: `ce165a7` `1fa691d` `1355159`
+- **デプロイ**: 済 (Worker version `17f84662-ee7e-4fce-af8e-40e12de7e392`)
+
+### 変更内容: TERASS PICKS方式の横断検索を実現
+- **TERASS仮想サイト統合** (`src/types/index.ts`): `SiteId` に `terass_reins` / `terass_suumo` / `terass_athome` 追加 + `SITES` 定数 3エントリ追加。フロントエンドの SITES_DATA に自動反映 → 742,345件のTERASS由来データがチップ・カード・モーダル全てで統一表示
+- **R2画像配信** (`src/index.tsx`): `GET /api/images/*` エンドポイント新設、`Cache-Control: public, max-age=31536000, immutable`
+- **画像自動エンキュー** (`src/scrapers/aggregator.ts`): `runScheduledScrape` 末尾で `enqueueAll(env)` 自動実行
+- **画像処理 cron** (`wrangler.toml`): `*/15 * * * *` で processQueue(50件/回)
+- **マイソク印刷** (`src/index.tsx`): モーダルに 🖨 印刷ボタン + `@media print` で A4縦最適化スタイル (header/sidebar/.modal-close を非表示、画像幅100%、`@page { size: A4; margin: 10mm; }`)
+- **空 detail_url 対応** (`src/db/queries.ts` + `src/index.tsx`): TERASSデータは詳細URLが空 → 外部リンクボタンを非表示
+- **重複排除** (`src/db/queries.ts`): `hideDuplicates` を opt-in (デフォルト false) に。750k行サブクエリ Workers CPU超過のため明示パラメータで切替
+- **検索JOIN強化** (`src/db/queries.ts`): `image_keys` を `LEFT JOIN property_images` で配列返却、Property型に `imageKeys: string[]`
+- **dedup回帰修正** (`1fa691d`): サイトフィルタ + fingerprint dedup 時に他サイトIDに負けて結果0となる問題を修正
+- **欠損テーブル作成** (`1355159`): 本番D1に `property_features` を CREATE (JOIN先未定義によるクエリエラー解消)
+
+### システムチェック (本番)
+| エンドポイント | 結果 |
+|---|---|
+| `/api/search?prefecture=23&limit=3` | 200 — terass_suumo データ正常返却 |
+| `/api/search?prefecture=23` (全媒体) | **25,696件** (terass_reins:6,413 + terass_suumo:9,761 + terass_athome:9,522 + 既存サイト) |
+| `/api/admin/stats` | 401 (Bearer認証ガード正常) |
+| `/api/health` | 200 |
+| `/api/images/foo.jpg` | 404 (ルート存在確認) |
+| HTML レンダリング | `terass_reins` チップ ✓ / `window.print()` ✓ / `@media print` ✓ / `/api/images/` ✓ |
+
+### ファクトチェック (D1実態)
+- properties: **742,412件** (terass_reins:442,448 / terass_suumo:150,998 / terass_athome:148,899 / athome:40 / rakumachi:19 / homes:3 / kenbiya:3 / chintai:2)
+- TERASS データの thumbnail_url / detail_url は **NULL** (TERASS PICKSのIndexedDBに含まれず)
+- property_images: 0 (画像URLを持つ媒体のスクレイプ実行待ち)
+- D1サイズ: 469MB / 500MB
+
+### 既知の制約・改善点
+1. **TERASS画像なし** — TERASS PICKSのIndexedDB自体にimage URLが含まれないため、TERASSの742,345件についてはマイソク画像取得不可。元ソース (REINS/SUUMO/at-home公式) からの画像補完が必要 → 将来 `address+price` で fingerprint join しスクレイプ画像を流用可能
+2. **hideDuplicates opt-in** — 750k行の MIN(id) GROUP BY が Workers CPU上限超過。将来 fingerprint インデックス化 + マテビュー化で常時ON可能に
+3. **suumo / fudosan / reins / smaity** — 4サイトは Cookie認証 / NXDOMAIN / 会員制MLS / SPA動的描画のためスクレイピング保留
+4. **property_features テーブル** — 0001 マイグレーションに含まれず本番のみ手動CREATE。マイグレーションファイル化推奨
+
+### 次のタスク
+- 画像取得済みサイト (HOMES / AtHome / kenbiya / rakumachi / chintai) で processQueue cron 動作確認 (15分後)
+- TERASS↔スクレイプ媒体の fingerprint クロスマッチで画像補完
+- `property_features` を migration 0005 として正式化
+
+---
+
 ## 2026-04-19 (Desktop)
 - **環境**: Desktop (Claude Code)
 - **ブランチ**: master
