@@ -21,10 +21,49 @@
 - **D1 cron監視** (`src/index.tsx`): scheduled handler で毎回 D1 容量チェック (450MB超で `console.error`)
 - **Drive同期スクリプト** (`scripts/sync-r2-to-drive.sh` + `scripts/README-DRIVE-SYNC.md`): R2 archive/ → Google Drive rclone同期
 
+### 本番実行結果 (2026-04-19 後段)
+- **ADMIN_SECRET ローテーション**: 新規生成 `56e6914f...` を `wrangler secret put` で設定
+- **archive-cold 実行**: 147 batch × 2,000件 = **292,411 sold行** を R2 (`real-estate-files/archive/properties/*.jsonl`) へアーカイブ＆D1から削除
+- **backfill-images**: 3件補完 (TERASSとスクレイプの fingerprint 一致は限定的、期待通り)
+- **backfill-detail-urls**: 449,934件 (※COALESCE仕様で実質的にdonorなしでも update扱いになる仕様バグ — 修正候補)
+- **D1容量**: 486MB → **273MB / 500MB** (45% headroom 確保)
+- **検索検証**: `?prefecture=23&hide_duplicates=true` → 1.88秒 / 19,113件 (CPU超過なし、is_dedup_primary インデックス効果)
+
+### 残物件分布 (450,024件)
+| site_id | 件数 |
+|---|---|
+| terass_suumo | 150,998 |
+| terass_reins | 150,037 |
+| terass_athome | 148,899 |
+| athome | 40 |
+| rakumachi | 21 |
+| chintai | 22 |
+| kenbiya | 4 |
+| homes | 3 |
+
+### Google Drive 3TB保管庫
+- フォルダID: `1o7duhNw1ngzT_EynWdX53cqzP-I_JHOB`
+- 同期スクリプト: `scripts/sync-r2-to-drive.sh` + `scripts/README-DRIVE-SYNC.md`
+- 必要セットアップ: `rclone config` で `gdrive` リモート作成 → Windows Task Scheduler で日次実行
+- 用途: R2 `archive/` プレフィックス (現在 sold行 jsonl 147ファイル) のオフサイトバックアップ
+
+### システムチェック結果サマリ
+| 項目 | 状態 |
+|---|---|
+| 横断検索 (TERASS+スクレイプ統合表示) | ✅ |
+| マイソク印刷 (`window.print()` + `@media print`) | ✅ |
+| R2画像配信 `/api/images/*` | ✅ |
+| 認証 (Bearer 401/200分岐) | ✅ |
+| Rate limit (KVベース) | ✅ |
+| dedup index (647k primary / 94k secondary) | ✅ |
+| D1容量 (273MB/500MB, 自動アラート 450MB) | ✅ |
+| 容量cron監視 | ✅ |
+
 ### 次のタスク
-- `POST /api/admin/archive-cold?limit=5000` で sold/delisted行をR2へアーカイブしD1容量削減
-- `POST /api/admin/backfill-images` で TERASS行に画像URL補完
-- D1現在: ~486MB / 500MB — archive-cold 実行推奨
+- `backfill-detail-urls` の COALESCE バグ修正 (EXISTS句で donor存在判定)
+- TERASS 画像の元ソース (REINS/SUUMO/at-home) からの非同期スクレイプ補完
+- rclone セットアップ後 Drive 同期 cron 実行
+- suumo (Cookie認証) / fudosan (NXDOMAIN) / reins (会員制) / smaity (SPA) — 4サイト調査
 
 ---
 
