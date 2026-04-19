@@ -5,6 +5,39 @@
 
 ---
 
+## 2026-04-19 15:30 (Desktop) — backfill修正 + 自動アーカイブ + restore + TERASS画像探索 + スクレイパー調査
+
+- **環境**: Desktop (Claude Code)
+- **ブランチ**: master
+- **コミット**: `c3145e0`
+- **デプロイ**: 済 (Worker version `5bf3f28a-09b6-44dd-b8f1-08e81f2c61a3`)
+
+### 変更内容
+- **backfill-detail-urls バグ修正** (`src/routes/admin.ts`): COALESCE により donor 不在でも `meta.changes` が誤カウントされる問題を修正。`EXISTS (SELECT 1 ...)` に変更し、実際に値が変わる行のみ UPDATE する
+- **archive.ts 新規** (`src/services/archive.ts`): `archiveOldestCold(env, batches=5, batchSize=2000)` helper — D1 cold 行をバッチでR2 JSONL ダンプ後 DELETE
+- **自動アーカイブ** (`src/index.tsx`): scheduled handler で D1 >= 450MB 時に `archiveOldestCold(5, 2000)` を自動実行 (最大 10,000件/cron)
+- **archive-cold リファクタ** (`src/routes/admin.ts`): 既存 endpoint を helper 経由に切り替え (`batches` / `batch_size` クエリパラメータ対応)
+- **archive/list** (`GET /api/admin/archive/list`): R2 オブジェクト一覧を JSON 返却
+- **archive/restore** (`POST /api/admin/archive/restore`): `{ r2Key }` で JSONL 読み込み → D1 INSERT OR IGNORE 復元
+- **terass-image-fetch.ts 新規** (`src/services/terass-image-fetch.ts`): TERASS 未補完行の住所から SUUMO/AtHome 検索 URL を生成し `download_queue` に `asset_type='mysoku_search'` でエンキュー
+- **terass-image-discover** (`POST /api/admin/terass-image-discover?limit=N`): 上記サービスの admin 起動口
+- **docs/SCRAPER_BLOCKERS.md**: SUUMO/不動産Japan/REINS/Smaity の現状・ブロッカー詳細・解決オプション・推奨アクションを文書化
+
+### 検証結果
+- `tsc --noEmit`: エラー 0
+- `GET /api/admin/d1-capacity` → `{"totalProperties":450024, ...}` OK
+- `GET /api/admin/archive/list` → 147件 R2 オブジェクト一覧 OK
+- `POST /api/admin/backfill-detail-urls` → `{"updated":0}` (donor なし = 正確な 0件)
+- `POST /api/admin/terass-image-discover?limit=10` → `{"scanned":10,"enqueued":20,"skipped":0}` OK
+
+### 次のタスク
+- `fudosan.ts` のドメインを `fudosan.co.jp` に修正 (SCRAPER_BLOCKERS.md の推奨 Option A)
+- `reins.ts` を cron 対象から除外
+- `mysoku_search` キュー処理 worker の実装 (terass-image-fetch の後続タスク)
+- archive/restore の本番テスト (実 R2 キーを使った復元検証)
+
+---
+
 ## 2026-04-19 (Desktop) — D1容量管理 + dedup高速化 + 画像補完 + Drive同期
 
 - **環境**: Desktop (Claude Code)
