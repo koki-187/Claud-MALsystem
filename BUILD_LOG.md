@@ -164,3 +164,29 @@
     - 残作業: TERASS PICKS → CSV 抽出部分（Playwright/Chrome拡張、別セッション推奨）
 - **デプロイ**: 済 (mal-search-system)
 - **次のタスク**: スクレイパー改修 Phase 2 (linkedom導入によるHTMLパーサー実装)
+
+## 2026-04-19 (Desktop) — TERASS PICKS CSV自動抽出 Phase 1 完成
+- **環境**: Desktop (Claude Code)
+- **ブランチ**: master
+- **変更内容**:
+  - **Phase 1 完成**: TERASS PICKS IndexedDB → CSV → D1 自動抽出パイプライン
+    - `scripts/terass-extract.js` 新規作成 — Chrome DevTools Console 用 IndexedDB エクスポーター
+      - 全 IndexedDB を自動スキャン、6ファイル (house/mansion/land × 在庫/成約済) をダウンロード
+      - 既存 CSV ヘッダーと完全一致 (後段変換スクリプトとの互換性確保)
+    - `scripts/extract-terass.mjs` 新規作成 — Playwright CDP 自動化スクリプト
+      - `--remote-debugging-port=9222` で起動した既存 Chrome にアタッチ (ログイン状態を再利用)
+      - TERASS PICKS タブを自動検出 → terass-extract.js を evaluate
+      - 完了後 `terass_convert_and_import.mjs` を spawn して即時 D1 同期
+      - `--dry-run` モードでアタッチ確認のみ実行可能
+    - `scripts/auto-import-terass.sh` 更新 — Phase 1 スケルトンを完全実装に置き換え
+      - 冒頭で `extract-terass.mjs` を実行
+      - 失敗時は既存 CSV を使ってインポート継続 (fallback)
+    - `scripts/TERASS_AUTO_IMPORT.md` 新規作成 — セットアップ手順 README
+      - Chrome CDP 起動方法、初回ログイン手順、Windows Task Scheduler 登録コマンド
+      - 環境変数リファレンス、トラブルシューティング
+    - `package.json` に `playwright ^1.44.0` を devDependencies に追加
+- **デプロイ**: 不要 (スクリプト追加のみ)
+- **次のタスク**:
+  - `npm install` を実行して playwright をローカルにインストール
+  - Chrome を `--remote-debugging-port=9222` で起動して `node scripts/extract-terass.mjs --dry-run` で動作確認
+  - スクレイパー改修 Phase 2 (linkedom導入)
