@@ -282,6 +282,14 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
   }
   // 毎時: 画像キューを最大50件処理
   ctx.waitUntil(processQueue(env, 50).catch(console.error));
+  // D1容量監視: 450MB超で警告ログ
+  ctx.waitUntil((async () => {
+    try {
+      const cap = await env.MAL_DB.prepare('SELECT COUNT(*) AS n FROM properties').first<{ n: number }>();
+      const mb = (cap?.n ?? 0) * 635 / 1024 / 1024;
+      if (mb > 450) console.error(`[D1-CAPACITY-ALERT] ${mb.toFixed(0)}MB / 500MB`);
+    } catch { /* ignore */ }
+  })());
 };
 
 export default { fetch: app.fetch, scheduled };

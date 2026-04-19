@@ -74,18 +74,11 @@ export async function searchProperties(
     const q = `%${params.query}%`;
     bindings.push(q, q, q);
   }
-  // hideDuplicates: default false — the full-table subquery on 750k+ rows times out in Workers.
-  // Opt-in via hide_duplicates=1; when a site filter is active dedup is scoped to those sites.
-  if (params.hideDuplicates === true) {
-    const siteRestrict = params.sites && params.sites.length > 0
-      ? `AND site_id IN (${params.sites.map(s => `'${s}'`).join(', ')})`
-      : '';
-    whereClauses.push(`p.id IN (
-      SELECT MIN(id) FROM properties WHERE fingerprint IS NOT NULL ${siteRestrict}
-      GROUP BY fingerprint
-      UNION ALL
-      SELECT id FROM properties WHERE fingerprint IS NULL ${siteRestrict}
-    )`);
+  // hideDuplicates: default true — use is_dedup_primary index (fast, no subquery)
+  // false: show all rows including duplicates
+  const hideDups = params.hideDuplicates ?? true;
+  if (hideDups) {
+    whereClauses.push('p.is_dedup_primary = 1');
   }
 
   const whereSQL = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';

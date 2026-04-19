@@ -416,4 +416,80 @@ admin.delete('/sold-cleanup', async (c) => {
   return c.json({ delistedCount: affected });
 });
 
+// ─── POST /api/admin/backfill-images ─────────────────────────────────────────
+// fingerprintが一致するスクレイプ済み行からTERASS行へ thumbnail_url をコピー
+admin.post('/backfill-images', async (c) => {
+  const r = await c.env.MAL_DB.prepare(`
+    UPDATE properties AS t
+    SET thumbnail_url = (
+      SELECT thumbnail_url FROM properties
+      WHERE fingerprint = t.fingerprint
+        AND thumbnail_url IS NOT NULL AND thumbnail_url != ''
+      LIMIT 1
+    )
+    WHERE (t.thumbnail_url IS NULL OR t.thumbnail_url = '')
+      AND t.fingerprint IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM properties WHERE fingerprint = t.fingerprint
+          AND thumbnail_url IS NOT NULL AND thumbnail_url != ''
+      )
+  `).run();
+  return c.json({ updated: r.meta?.changes ?? 0 });
+});
+
+// ─── POST /api/admin/backfill-detail-urls ────────────────────────────────────
+// fingerprintが一致する行から detail_url を補完
+admin.post('/backfill-detail-urls', async (c) => {
+  const r = await c.env.MAL_DB.prepare(`
+    UPDATE properties AS t
+    SET detail_url = COALESCE(
+      (SELECT detail_url FROM properties
+       WHERE fingerprint = t.fingerprint
+         AND detail_url IS NOT NULL AND detail_url != ''
+       LIMIT 1), t.detail_url)
+    WHERE (t.detail_url IS NULL OR t.detail_url = '')
+      AND t.fingerprint IS NOT NULL
+  `).run();
+  return c.json({ updated: r.meta?.changes ?? 0 });
+});
+
+// ─── GET /api/admin/d1-capacity ──────────────────────────────────────────────
+admin.get('/d1-capacity', async (c) => {
+  const total = await safeFirst<{ n: number }>(
+    c.env.MAL_DB.prepare('SELECT COUNT(*) AS n FROM properties')
+  );
+  const sites = await safeAll<{ site_id: string; n: number }>(
+    c.env.MAL_DB.prepare('SELECT site_id, COUNT(*) AS n FROM properties GROUP BY site_id')
+  );
+  const sold = await safeFirst<{ n: number }>(
+    c.env.MAL_DB.prepare("SELECT COUNT(*) AS n FROM properties WHERE status='sold' OR status='delisted'")
+  );
+  const totalN = total?.n ?? 0;
+  const estimatedMb = Math.round(totalN * 635 / 1024 / 1024);
+  return c.json({
+    totalProperties: totalN,
+    soldOrDelisted: sold?.n ?? 0,
+    sites: sites.results,
+    estimatedDbMb: estimatedMb,
+    capacityMb: 500,
+    warning: estimatedMb > 450 ? 'D1 80% 超過' : null,
+  });
+});
+
+// ─── POST /api/admin/archive-cold ────────────────────────────────────────────
+// status='sold'/'delisted' 行を R2 へ JSONL ダンプし D1 から削除
+admin.post('/archive-cold', async (c) => {
+  const limit = Number(new URL(c.req.url).searchParams.get('limit') ?? '1000');
+  const rows = await c.env.MAL_DB.prepare(
+    "SELECT * FROM properties WHERE status IN ('sold','delisted') LIMIT ?"
+  ).bind(limit).all();
+  if (!rows.results || rows.results.length === 0) return c.json({ archived: 0 });
+  const jsonl = rows.results.map(r => JSON.stringify(r)).join('\n');
+  const key = `archive/properties/${new Date().toISOString().slice(0, 10)}_${Date.now()}.jsonl`;
+  await c.env.MAL_STORAGE.put(key, jsonl, { httpMetadata: { contentType: 'application/x-ndjson' } });
+  const ids = rows.results.map(r => `'${(r as Record<string, unknown>).id}'`).join(',');
+  const del = await c.env.MAL_DB.prepare(`DELETE FROM properties WHERE id IN (${ids})`).run();
+  return c.json({ archived: rows.results.length, deleted: del.meta?.changes ?? 0, r2Key: key });
+});
+
 export { admin };
