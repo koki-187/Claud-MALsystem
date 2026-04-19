@@ -271,3 +271,24 @@
 - **検証結果**: 9サイト × 3都道府県 = 27ジョブ全て例外なく実行確認 (mock廃止＋linkedomパース動作OK)
   - ⚠️ **D1 size limit到達** (589MB / 926k rows) — 新規スクレイプ書込が `D1_ERROR: Exceeded maximum DB size`
 - **次のタスク**: D1容量対策 (sold cleanup or paid plan upgrade) → 容量解決後 cron で実データ蓄積開始
+
+## 2026-04-19 22:55 (Desktop) — D1容量回復 + 本番スクレイプ初成功
+- **環境**: Desktop (Claude Code) — D1直接操作 (Cloudflare MCP)
+- **ブランチ**: master
+- **変更内容**:
+  - **D1容量回復** (`520MB→470MB`):
+    - 低利用度index 4本削除 (`status_type`, `status_prefecture`, `scraped_at`, `last_seen`, `area`)
+    - sold_at < 2023-01-01 の sold物件 約184k行 削除 (バッチ処理で `Exceeded maximum DB size` 回避)
+    - クリティカルindex再作成: `idx_properties_status_prefecture`, `idx_properties_status_type`, `idx_properties_scraped_at`
+  - **`price_history` テーブル本番作成** — migration 0001 で定義済だが本番未適用。直接CREATE
+  - **ヘルスチェック**: 9サイト×3都道府県=27ジョブ実行
+    - ✅ **HOME'S/07: `completed` — 本番初の実データ書込成功**
+    - 他8サイト: `skipped_mock` (実サイトHTML構造とセレクタ不一致、Phase 2継続調整対象)
+- **DB状態**:
+  - 容量: 589MB → 470MB (-20%)
+  - properties: 926,226 → 742,345 (sold 476k→292k, active 449k維持)
+- **デプロイ**: 不要 (D1直接操作のみ)
+- **次のタスク**:
+  1. HOME'S以外8サイトのCSSセレクタを実HTML検証で調整 (各サイト数時間)
+  2. 容量さらに必要なら sold_at < 2024 を段階削除
+  3. Phase 1 (TERASS Chrome拡張動作確認) — 別セッション推奨
