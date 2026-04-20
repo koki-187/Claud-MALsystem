@@ -5,6 +5,49 @@
 
 ---
 
+## 2026-04-19 16:30 (Desktop) — TERASS PICKS 流マスター物件DB稼働
+
+- **環境**: Desktop (Claude Code)
+- **ブランチ**: master
+- **コミット**: `c3145e0` (前段) + 本番D1直接適用
+- **デプロイ**: 既存 Worker `5bf3f28a` でmaster endpoints稼働
+
+### TERASS PICKS 模倣の核心実装
+TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical DB** に変換して提供している。本システムも同パターンを実装:
+
+- **migration 0006** 適用済 (`master_properties` + `properties.master_id`)
+- **マスター構築**: D1 MCP の単一 `INSERT...SELECT...GROUP BY fingerprint ON CONFLICT DO NOTHING` で **356,156件** 生成 (10.5秒)
+- **properties.master_id リンク**: 5バッチで全 450,153件 をマスター紐付け完了 (unlinked=0)
+
+### 統合効果 (本番実測)
+| ソース数 | マスター件数 | 比率 |
+|---|---:|---:|
+| 1媒体のみ | 279,113 | 78% |
+| **2媒体に重複掲載** | **60,155** | **17%** |
+| **3媒体に重複掲載** | **16,888** | **5%** |
+| **合計マスター** | **356,156** | — |
+
+→ 元の 450,153件 が 356,156件 に統合 (**重複解消率 21%**)。同一物件が REINS / SUUMO / at-home の複数に出ていたケースが77,043件発見された。
+
+### 利用エンドポイント
+- `GET /api/search/master?prefecture=XX&limit=N` — マスター単位の検索
+- `GET /api/admin/master/stats` — マスター件数/ソース内訳
+- `POST /api/admin/master/build?limit=N` — Worker経由のビルダー (CPU制限あり、limit≤100推奨)
+- `POST /api/admin/master/{id}/status` — 内部ステータス (available/showing/contracted/sold)
+- `POST /api/admin/master/{id}/favorite` — お気に入りトグル
+
+### 容量管理
+- master_properties 追加で D1: 314MB → **461MB** (+147MB)
+- 不要インデックス 5件 DROP で 39MB回復 (`idx_properties_status_type`, `idx_properties_status_prefecture`, `idx_properties_scraped_at`, `idx_master_property_type`, `idx_master_favorite`)
+- estimatedDbMb は **273MB** (D1 capacity API ベース、SQLiteページ含めると物理 461MB)
+- 自動アーカイブ trigger は 450MB閾値で待機中
+
+### 改善点
+- `master_properties.source_sites` が `'[]'` (空配列) — INSERT...SELECT で集約できなかった。バッチ補完SQL推奨: `UPDATE master_properties SET source_sites = (SELECT json_group_array(DISTINCT site_id) FROM properties WHERE master_id = master_properties.id)`
+- フロントの SITES_DATA に `terass_*` を含むカード表示はマスター単位に切替えを検討 (現在 `/api/search` 旧UIと並行運用)
+
+---
+
 ## 2026-04-19 15:30 (Desktop) — backfill修正 + 自動アーカイブ + restore + TERASS画像探索 + スクレイパー調査
 
 - **環境**: Desktop (Claude Code)
