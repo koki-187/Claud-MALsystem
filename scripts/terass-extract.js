@@ -2,7 +2,7 @@
  * TERASS PICKS IndexedDB エクスポーター
  * ===========================================
  * 使い方:
- *   1. Chrome で https://picks.terass-agents.com/ を開いてログイン
+ *   1. Chrome で https://picks-agent.terass.com/search/mansion (または旧 picks.terass-agents.com) を開いてログイン
  *   2. F12 → Console タブを開く
  *   3. このスクリプト全体をコピー＆ペーストして Enter
  *   4. 6ファイルが自動ダウンロードされる

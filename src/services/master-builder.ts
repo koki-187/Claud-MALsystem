@@ -12,13 +12,12 @@ export interface BuildMastersResult {
 
 interface FingerprintGroup {
   fingerprint: string;
-  ids: string;          // comma-separated property ids
-  sites: string;        // comma-separated site_ids
-  titles: string;       // comma-separated titles
-  prices: string;       // comma-separated prices (may have nulls as empty)
-  thumbnails: string;   // comma-separated thumbnail_urls
-  descriptions: string; // comma-separated descriptions
-  // representative best row fields
+  ids: string;           // comma-separated property ids
+  sites: string;         // comma-separated site_ids
+  titles: string;        // comma-separated titles
+  prices: string;        // comma-separated prices (may have nulls as empty)
+  thumbnails: string;    // comma-separated thumbnail_urls
+  descriptions: string;  // comma-separated descriptions
   property_type: string;
   prefecture: string;
   city: string;
@@ -41,17 +40,15 @@ interface FingerprintGroup {
   longitude: number | null;
   first_listed_at: string | null;
   last_seen_at: string | null;
-  primary_r2_key: string | null;
   cnt: number;
 }
 
 /** fingerprint から master_properties.id を生成 */
 function makeMasterId(fingerprint: string): string {
-  // fingerprint は hex 文字列なので先頭 16 文字を使う
   return 'mp_' + fingerprint.slice(0, 16);
 }
 
-/** 改行・カンマ区切り文字列から最長の非空文字列を選ぶ */
+/** カンマ区切り文字列から最長の非空文字列を選ぶ */
 function longestOf(csv: string | null | undefined): string | null {
   if (!csv) return null;
   const parts = csv.split(',').filter(Boolean);
@@ -59,28 +56,43 @@ function longestOf(csv: string | null | undefined): string | null {
   return parts.reduce((a, b) => (b.length > a.length ? b : a), '');
 }
 
-/** 改行・カンマ区切り価格文字列から最初の非null整数を選ぶ */
+/** カンマ区切り価格文字列から最初の非null正整数を選ぶ */
 function firstPrice(csv: string | null | undefined): number | null {
   if (!csv) return null;
   for (const p of csv.split(',')) {
-    const n = parseInt(p, 10);
+    const n = parseInt(p.trim(), 10);
     if (!isNaN(n) && n > 0) return n;
   }
   return null;
 }
 
-/** 未リンク fingerprint を batchSize 件ずつ処理 */
+/** 未リンク fingerprint を batchSize 件ずつ処理
+ *  NOTE: 各バッチは fingerprint の DISTINCT リストを取得してから
+ *  プロパティを集計する 2-step アプローチにより D1 タイムアウトを回避
+ */
 export async function buildMasters(
   env: Bindings,
-  batchSize = 5000,
+  batchSize = 2000,
 ): Promise<BuildMastersResult> {
   const db = env.MAL_DB;
   let created = 0;
   let updated = 0;
   let linked = 0;
 
-  // 未リンクまたは新規 fingerprint グループを取得
-  // is_dedup_primary=1 行を代表行として使いつつ全件集計
+  // Step 1: 未リンク fingerprint を batchSize 件取得 (軽いクエリ)
+  const fpRows = await db.prepare(`
+    SELECT DISTINCT fingerprint
+    FROM properties
+    WHERE fingerprint IS NOT NULL
+      AND (master_id IS NULL OR master_id = '')
+    LIMIT ?
+  `).bind(batchSize).all<{ fingerprint: string }>();
+
+  const fingerprints = (fpRows.results ?? []).map(r => r.fingerprint);
+  if (fingerprints.length === 0) return { created: 0, updated: 0, linked: 0 };
+
+  // Step 2: 取得した fingerprint 群を IN で集計 (スコープが限定されるので高速)
+  const placeholders = fingerprints.map(() => '?').join(', ');
   const rows = await db.prepare(`
     SELECT
       p.fingerprint,
@@ -112,15 +124,11 @@ export async function buildMasters(
       MAX(p.longitude) as longitude,
       MIN(p.listed_at) as first_listed_at,
       MAX(p.last_seen_at) as last_seen_at,
-      MAX(pi.r2_key) as primary_r2_key,
       COUNT(*) as cnt
     FROM properties p
-    LEFT JOIN property_images pi ON pi.property_id = p.id AND pi.download_status = 'downloaded'
-    WHERE p.fingerprint IS NOT NULL
-      AND (p.master_id IS NULL OR p.master_id = '')
+    WHERE p.fingerprint IN (${placeholders})
     GROUP BY p.fingerprint
-    LIMIT ?
-  `).bind(batchSize).all<FingerprintGroup>();
+  `).bind(...fingerprints).all<FingerprintGroup>();
 
   const groups = rows.results ?? [];
   if (groups.length === 0) return { created: 0, updated: 0, linked: 0 };
@@ -148,7 +156,7 @@ export async function buildMasters(
         management_fee, repair_fund, direction, structure,
         yield_rate, latitude, longitude, description,
         source_count, source_sites, primary_source_id,
-        primary_thumbnail_url, primary_r2_key,
+        primary_thumbnail_url,
         first_listed_at, last_seen_at,
         created_at, updated_at
       ) VALUES (
@@ -159,7 +167,7 @@ export async function buildMasters(
         ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?,
-        ?, ?,
+        ?,
         ?, ?,
         datetime('now'), datetime('now')
       )
@@ -171,7 +179,6 @@ export async function buildMasters(
         source_sites        = excluded.source_sites,
         primary_source_id   = COALESCE(master_properties.primary_source_id, excluded.primary_source_id),
         primary_thumbnail_url = COALESCE(master_properties.primary_thumbnail_url, excluded.primary_thumbnail_url),
-        primary_r2_key      = COALESCE(master_properties.primary_r2_key, excluded.primary_r2_key),
         last_seen_at        = excluded.last_seen_at,
         updated_at          = datetime('now')
     `).bind(
@@ -185,28 +192,21 @@ export async function buildMasters(
       g.yield_rate ?? null, g.latitude ?? null, g.longitude ?? null,
       description ?? null,
       uniqueSites.length, sourceSites, primarySourceId,
-      thumbnail ?? null, g.primary_r2_key ?? null,
+      thumbnail ?? null,
       g.first_listed_at ?? null, g.last_seen_at ?? null,
     ).run();
 
-    const wasInsert = (upsertResult.meta?.changes as number | undefined) === 1 &&
-                      (upsertResult.meta as Record<string, unknown>)?.last_row_id !== undefined;
-    // D1 doesn't reliably distinguish insert vs update via meta, so count by existing check
-    // We use source_count to infer: if newly created source_count == g.cnt, it's new
-    // Simpler: just track by whether rows exist before (not worth extra query). Count all as updated.
     if ((upsertResult.meta?.changes as number | undefined) ?? 0 > 0) {
-      // Heuristic: if primary_source_id was null before, it's a new master
-      // We'll just add to created for now (the distinction doesn't affect correctness)
       created++;
     } else {
       updated++;
     }
 
-    // Link all properties in this group to the master
+    // Link all properties in this fingerprint group to the master
     if (idList.length > 0) {
-      const placeholders = idList.map(() => '?').join(', ');
+      const idPlaceholders = idList.map(() => '?').join(', ');
       const linkResult = await db.prepare(
-        `UPDATE properties SET master_id = ? WHERE id IN (${placeholders})`
+        `UPDATE properties SET master_id = ? WHERE id IN (${idPlaceholders})`
       ).bind(masterId, ...idList).run();
       linked += (linkResult.meta?.changes as number | undefined) ?? 0;
     }
@@ -219,7 +219,7 @@ export async function buildMasters(
 export async function buildAllMasters(
   env: Bindings,
   maxChunks = 20,
-  chunkSize = 5000,
+  chunkSize = 2000,
 ): Promise<BuildMastersResult & { chunks: number }> {
   let totalCreated = 0;
   let totalUpdated = 0;
@@ -232,7 +232,7 @@ export async function buildAllMasters(
     totalUpdated += result.updated;
     totalLinked += result.linked;
     chunks++;
-    // If nothing was processed, we're done
+    // Nothing processed → all done
     if (result.created + result.updated === 0) break;
   }
 

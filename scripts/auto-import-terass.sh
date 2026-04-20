@@ -14,7 +14,7 @@
 #     --remote-debugging-port=9222 ^
 #     --user-data-dir="%APPDATA%\Chrome_CDP"
 #
-#   起動後、https://picks.terass-agents.com/ を開いてログインしておく
+#   起動後、https://picks-agent.terass.com/search/mansion (または旧 picks.terass-agents.com) を開いてログインしておく
 #   (初回のみ。以降は同じ --user-data-dir を使えばセッションが維持される)
 # =====================================================================
 #

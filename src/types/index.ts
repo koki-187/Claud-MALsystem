@@ -42,9 +42,9 @@ export const SITES: Record<SiteId, SiteConfig> = {
   reins:        { id: 'reins',        name: 'REINS',         url: 'https://www.reins.or.jp',               logo: '📋', color: '#2ECC71', rateLimit: 5  },
   kenbiya:      { id: 'kenbiya',      name: '健美家',         url: 'https://www.kenbiya.com',               logo: '💰', color: '#DC2626', rateLimit: 8  },
   rakumachi:    { id: 'rakumachi',    name: '楽待',           url: 'https://www.rakumachi.jp',              logo: '📈', color: '#7C3AED', rateLimit: 8  },
-  terass_reins: { id: 'terass_reins', name: 'TERASS-REINS',  url: 'https://picks.terass-agents.com',       logo: '📋', color: '#10B981', rateLimit: 0  },
-  terass_suumo: { id: 'terass_suumo', name: 'TERASS-SUUMO',  url: 'https://picks.terass-agents.com',       logo: '🏠', color: '#059669', rateLimit: 0  },
-  terass_athome:{ id: 'terass_athome',name: 'TERASS-AtHome', url: 'https://picks.terass-agents.com',       logo: '🏘', color: '#0891B2', rateLimit: 0  },
+  terass_reins: { id: 'terass_reins', name: 'TERASS-REINS',  url: 'https://picks-agent.terass.com',       logo: '📋', color: '#10B981', rateLimit: 0  },
+  terass_suumo: { id: 'terass_suumo', name: 'TERASS-SUUMO',  url: 'https://picks-agent.terass.com',       logo: '🏠', color: '#059669', rateLimit: 0  },
+  terass_athome:{ id: 'terass_athome',name: 'TERASS-AtHome', url: 'https://picks-agent.terass.com',       logo: '🏘', color: '#0891B2', rateLimit: 0  },
 };
 
 export type PropertyType =

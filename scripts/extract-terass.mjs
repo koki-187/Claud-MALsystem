@@ -7,7 +7,7 @@
  *
  * 前提:
  *   Chrome を --remote-debugging-port=9222 オプションで起動済み
- *   TERASS PICKS (https://picks.terass-agents.com/) にログイン済み
+ *   TERASS PICKS (https://picks-agent.terass.com/ または https://picks.terass-agents.com/) にログイン済み
  *
  * 使い方:
  *   node scripts/extract-terass.mjs            # 通常実行
@@ -27,7 +27,9 @@ import { fileURLToPath } from 'url';
 const CDP_URL = process.env.CDP_URL || 'http://localhost:9222';
 const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR || 'C:/Users/reale/Downloads';
 const CONVERT_SCRIPT = process.env.CONVERT_SCRIPT || join(DOWNLOADS_DIR, 'terass_convert_and_import.mjs');
-const TERASS_URL_PATTERN = 'picks.terass-agents.com';
+// 新旧両ドメインに対応 (2026年に picks-agent.terass.com に移行)
+const TERASS_URL_PATTERNS = ['picks-agent.terass.com', 'picks.terass-agents.com'];
+const TERASS_URL_PATTERN = TERASS_URL_PATTERNS.join(' / ');
 const DRY_RUN = process.argv.includes('--dry-run');
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const EXTRACT_JS_PATH = join(SCRIPT_DIR, 'terass-extract.js');
@@ -69,7 +71,7 @@ function findTerassTab(targets) {
   return targets.find(t =>
     t.type === 'page' &&
     t.url &&
-    t.url.includes(TERASS_URL_PATTERN)
+    TERASS_URL_PATTERNS.some(pat => t.url.includes(pat))
   );
 }
 
@@ -98,7 +100,7 @@ async function main() {
     pageTargets.forEach((t, i) => log(`  [${i}] ${t.url}`));
     throw new Error(
       `TERASS PICKS タブが見つかりません (URL に "${TERASS_URL_PATTERN}" を含むタブ)\n` +
-      `Chrome で https://picks.terass-agents.com/ を開いてからもう一度実行してください。`
+      `Chrome で https://picks-agent.terass.com/search/mansion を開いてからもう一度実行してください。`
     );
   }
   log(`TERASS PICKS タブ検出: ${terassTarget.url}`);
@@ -125,7 +127,7 @@ async function main() {
     for (const ctx of contexts) {
       const pages = ctx.pages();
       for (const page of pages) {
-        if (page.url().includes(TERASS_URL_PATTERN)) {
+        if (TERASS_URL_PATTERNS.some(pat => page.url().includes(pat))) {
           terassPage = page;
           break;
         }
