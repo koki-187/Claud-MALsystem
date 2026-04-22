@@ -17,16 +17,28 @@ else
   echo "  ⚠️  node_modules がありません。npm install を実行してください"
 fi
 
-# Workerエンドポイント疎通
+# Workerエンドポイント疎通 (admin は Bearer 認証必須、未設定なら public /api/health で代替)
 echo ""
 echo "[2/3] 本番Worker疎通テスト"
-WORKER_URL="https://mal-search-system.navigator-187.workers.dev"
-if curl -sf "${WORKER_URL}/api/admin/stats" -o /tmp/stats.json --max-time 10; then
-  TOTAL=$(grep -o '"totalProperties":[0-9]*' /tmp/stats.json | head -1 | grep -o '[0-9]*')
-  echo "  ✅ /api/admin/stats OK (totalProperties=${TOTAL})"
+WORKER_URL="${WORKER_URL:-https://mal-search-system.navigator-187.workers.dev}"
+ADMIN_SECRET="${ADMIN_SECRET:-}"
+if [ -n "$ADMIN_SECRET" ]; then
+  if curl -sf "${WORKER_URL}/api/admin/stats" \
+      -H "Authorization: Bearer ${ADMIN_SECRET}" \
+      -o /tmp/stats.json --max-time 10; then
+    TOTAL=$(grep -o '"totalProperties":[0-9]*' /tmp/stats.json | head -1 | grep -o '[0-9]*')
+    echo "  ✅ /api/admin/stats OK (totalProperties=${TOTAL})"
+  else
+    echo "  ❌ Admin API接続失敗 (認証 or ネットワーク): ${WORKER_URL}"
+    exit 1
+  fi
 else
-  echo "  ❌ Worker接続失敗: ${WORKER_URL}"
-  exit 1
+  if curl -sf "${WORKER_URL}/api/health" -o /tmp/health.json --max-time 10; then
+    echo "  ✅ /api/health OK (ADMIN_SECRET 未設定のため admin/stats はスキップ)"
+  else
+    echo "  ❌ Worker接続失敗: ${WORKER_URL}"
+    exit 1
+  fi
 fi
 
 # 検索エンドポイント

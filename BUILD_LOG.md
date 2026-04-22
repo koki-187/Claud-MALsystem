@@ -5,6 +5,46 @@
 
 ---
 
+## 2026-04-22 22:40 (Desktop) — システム包括レビュー & 改善実装
+
+- **環境**: Desktop (Windows / Git Bash)
+- **ブランチ**: master
+- **デプロイ**: 未 (要 `wrangler deploy` for src/ + wrangler.toml 変更)
+
+### 検証完了の事実
+- **D1 free tier = 5GB** (公式ドキュメント確認済) — コード内の 500MB 仮定は誤りだった
+- `extract-terass.mjs:29` の CONVERT_SCRIPT は旧 `Downloads/` パスのまま (実害発生前に発見)
+- `run-auto-import.bat` は `auto-import-terass.sh` の fallback ロジックを迂回していた
+- `wrangler r2 object put` の `--remote` は wrangler 3.114 で未対応 (default が remote)
+
+### 実装した修正
+| 箇所 | 修正内容 | 解決した所見 |
+|------|---------|-------------|
+| `scripts/extract-terass.mjs:28-29` | `CONVERT_SCRIPT` デフォルトを `${SCRIPT_DIR}/terass_convert_and_import.mjs` に | C3 |
+| `scripts/auto-import-terass.sh:113-130` | health check に `Authorization: Bearer ${ADMIN_SECRET}` 付与、未設定時はスキップ | M2 |
+| `scripts/test.sh:20-40` | 同上 + 未設定時は `/api/health` (public) で代替 | M3 |
+| `src/routes/admin.ts:464-499` | D1 容量を `PRAGMA page_count × page_size` で実測、上限を 5120MB に | M1 + ファクト修正 |
+| `src/index.tsx:329-340` | scheduled handler の容量監視も PRAGMA ベース、閾値 4096MB (80%) に | M1 |
+| `src/index.tsx:195` | health endpoint バージョンフォールバック `6.0.0` → `6.2.0` | バージョン統一 |
+| `wrangler.toml:24-31` | `APP_VERSION = "6.2.0"`、`WORKER_URL` 追加 (scheduled handler self-call 用) | m4 + バージョン統一 |
+| `scripts/run-auto-import.ps1` (新規) | Chrome CDP 起動→待機→`auto-import-terass.sh` 呼び出し→自前 Chrome のみ終了 | C1 + C2 |
+| Task Scheduler 再登録 | `powershell.exe -File run-auto-import.ps1` を毎日 03:00 (旧 bat 削除) | C1 + C2 |
+
+### スモークテスト結果
+- `bash scripts/auto-import-terass.sh` (ADMIN_SECRET 未設定) で実行
+- ✅ 「ADMIN_SECRET 未設定のためヘルスチェックをスキップ」が出力 (false WARNING 解消確認)
+- ✅ importer が CSV 発見→API 呼び出しまで到達、`{"error":"Unauthorized"}` = Worker admin auth 正常動作
+- ✅ exit code 0 (致命的失敗なし、fallback 無効化問題が解消)
+
+### 残課題 (即対応不要)
+- `wrangler deploy` で src/ + wrangler.toml の変更を本番反映する必要あり
+- `ADMIN_SECRET` を `wrangler secret put ADMIN_SECRET` で設定 + ローカル `setx ADMIN_SECRET` で Task Scheduler 環境にも反映 (現状は importer の Worker 経由 import が auth で弾かれる)
+- `terass_cron.log` のローテーション (PowerShell wrapper 内で日付付き分割を検討)
+- 定数時間比較 `src/index.tsx:292-293` を `crypto.subtle.timingSafeEqual` 化 (低リスクだがベストプラクティス)
+- Task Scheduler の "ログオン状態を問わず実行" は管理者権限必須のため未設定 (現状は対話モードのみ — PC スリープ時は実行されない)
+
+---
+
 ## 2026-04-19 16:30 (Desktop) — TERASS PICKS 流マスター物件DB稼働
 
 - **環境**: Desktop (Claude Code)

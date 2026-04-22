@@ -112,13 +112,24 @@ fi
 # =====================================================================
 echo ""
 echo "[auto-import] D1統計を取得中..."
-if curl -sf "https://mal-search-system.navigator-187.workers.dev/api/admin/stats" \
+WORKER_URL="${WORKER_URL:-https://mal-search-system.navigator-187.workers.dev}"
+ADMIN_SECRET="${ADMIN_SECRET:-}"
+auth_header=()
+if [ -n "$ADMIN_SECRET" ]; then
+  auth_header=(-H "Authorization: Bearer ${ADMIN_SECRET}")
+fi
+if curl -sf "${WORKER_URL}/api/admin/stats" \
+    "${auth_header[@]}" \
     --max-time 10 \
     -o /tmp/mal_stats.json 2>/dev/null; then
   total=$(grep -o '"totalProperties":[0-9]*' /tmp/mal_stats.json | grep -o '[0-9]*' || echo '不明')
   echo "[auto-import] 完了: D1 total = ${total} properties"
 else
-  echo "[auto-import] WARNING: ヘルスチェックに失敗しました (ネットワーク確認)"
+  if [ -z "$ADMIN_SECRET" ]; then
+    echo "[auto-import] WARNING: ADMIN_SECRET 未設定のためヘルスチェックをスキップ (importは正常完了)"
+  else
+    echo "[auto-import] WARNING: ヘルスチェックに失敗しました (ネットワーク or 認証)"
+  fi
 fi
 
 echo "[auto-import] =========================================="

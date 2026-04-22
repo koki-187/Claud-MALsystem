@@ -192,7 +192,7 @@ app.get('/api/search/master', async (c) => {
 
 app.get('/api/health', (c) => c.json({
   status: 'ok',
-  version: c.env.APP_VERSION ?? '6.0.0',
+  version: c.env.APP_VERSION ?? '6.2.0',
   timestamp: new Date().toISOString(),
   sites: Object.keys(SITES).length,
 }));
@@ -326,13 +326,15 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
       console.log(`[master-builder] created=${r.created} updated=${r.updated} linked=${r.linked}`);
     }
   }).catch(console.error));
-  // D1容量監視: 450MB超で自動アーカイブ (5 batch × 2,000件 = 最大10,000件)
+  // D1容量監視: free tier 5GB (5120MB) の 80% (4096MB) 超で自動アーカイブ
+  // PRAGMA page_count × page_size で実サイズを取得 (行数概算より高精度)
   ctx.waitUntil((async () => {
     try {
-      const cap = await env.MAL_DB.prepare('SELECT COUNT(*) AS n FROM properties').first<{ n: number }>();
-      const mb = (cap?.n ?? 0) * 635 / 1024 / 1024;
-      if (mb >= 450) {
-        console.error(`[D1-CAPACITY-ALERT] ${mb.toFixed(0)}MB >= 450MB — starting auto-archive`);
+      const pc = await env.MAL_DB.prepare('PRAGMA page_count').first<{ page_count: number }>();
+      const ps = await env.MAL_DB.prepare('PRAGMA page_size').first<{ page_size: number }>();
+      const mb = pc && ps ? (pc.page_count * ps.page_size) / 1024 / 1024 : 0;
+      if (mb >= 4096) {
+        console.error(`[D1-CAPACITY-ALERT] ${mb.toFixed(0)}MB >= 4096MB (80% of 5GB) — starting auto-archive`);
         const result = await archiveOldestCold(env, 5, 2000);
         console.log(`[D1-AUTO-ARCHIVE] archived=${result.archived} deleted=${result.deleted} keys=${result.r2Keys.length}`);
       }

@@ -462,6 +462,7 @@ admin.post('/backfill-detail-urls', async (c) => {
 });
 
 // ─── GET /api/admin/d1-capacity ──────────────────────────────────────────────
+// D1 free tier 上限: 5GB (5120MB) — 2024/3 改定。警告閾値は 80% (4096MB)
 admin.get('/d1-capacity', async (c) => {
   const total = await safeFirst<{ n: number }>(
     c.env.MAL_DB.prepare('SELECT COUNT(*) AS n FROM properties')
@@ -472,15 +473,31 @@ admin.get('/d1-capacity', async (c) => {
   const sold = await safeFirst<{ n: number }>(
     c.env.MAL_DB.prepare("SELECT COUNT(*) AS n FROM properties WHERE status='sold' OR status='delisted'")
   );
+  // SQLite PRAGMA で実サイズ取得 (page_count × page_size)
+  let actualMb = 0;
+  try {
+    const pc = await c.env.MAL_DB.prepare('PRAGMA page_count').first<{ page_count: number }>();
+    const ps = await c.env.MAL_DB.prepare('PRAGMA page_size').first<{ page_size: number }>();
+    if (pc && ps) {
+      actualMb = Math.round((pc.page_count * ps.page_size) / 1024 / 1024);
+    }
+  } catch (e) {
+    console.warn('[d1-capacity] PRAGMA failed:', e);
+  }
   const totalN = total?.n ?? 0;
-  const estimatedMb = Math.round(totalN * 635 / 1024 / 1024);
+  const estimatedMb = Math.round((totalN * 635) / 1024 / 1024);
+  const reportedMb = actualMb || estimatedMb;
+  const CAPACITY_MB = 5120; // D1 free tier 5GB
+  const WARN_MB = 4096;     // 80%
   return c.json({
     totalProperties: totalN,
     soldOrDelisted: sold?.n ?? 0,
     sites: sites.results,
+    actualDbMb: actualMb || null,
     estimatedDbMb: estimatedMb,
-    capacityMb: 500,
-    warning: estimatedMb > 450 ? 'D1 80% 超過' : null,
+    capacityMb: CAPACITY_MB,
+    usagePercent: Math.round((reportedMb / CAPACITY_MB) * 100),
+    warning: reportedMb > WARN_MB ? `D1 80%超過 (${reportedMb}MB / ${CAPACITY_MB}MB)` : null,
   });
 });
 

@@ -26,12 +26,13 @@ import { fileURLToPath } from 'url';
 // ===== 設定 =====
 const CDP_URL = process.env.CDP_URL || 'http://localhost:9222';
 const DOWNLOADS_DIR = process.env.DOWNLOADS_DIR || 'C:/Users/reale/Downloads';
-const CONVERT_SCRIPT = process.env.CONVERT_SCRIPT || join(DOWNLOADS_DIR, 'terass_convert_and_import.mjs');
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+// CONVERT_SCRIPT: リポジトリ内の scripts/terass_convert_and_import.mjs を優先 (旧 Downloads/ 依存を排除)
+const CONVERT_SCRIPT = process.env.CONVERT_SCRIPT || join(SCRIPT_DIR, 'terass_convert_and_import.mjs');
 // 新旧両ドメインに対応 (2026年に picks-agent.terass.com に移行)
 const TERASS_URL_PATTERNS = ['picks-agent.terass.com', 'picks.terass-agents.com'];
 const TERASS_URL_PATTERN = TERASS_URL_PATTERNS.join(' / ');
 const DRY_RUN = process.argv.includes('--dry-run');
-const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const EXTRACT_JS_PATH = join(SCRIPT_DIR, 'terass-extract.js');
 
 // ダウンロード完了を待つタイムアウト (ms)
