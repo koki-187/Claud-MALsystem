@@ -108,10 +108,37 @@ $bashCmd = "cd '$($ProjectDir -replace '\\', '/')' && ./scripts/auto-import-tera
 $importExitCode = $LASTEXITCODE
 Write-Log "auto-import-terass.sh 終了コード: $importExitCode"
 
-# Step 4: 自前で起動した Chrome のみクリーンアップ
+# Step 4: 自前で起動した Chrome のみクリーンアップ (グレースフル終了でセッション永続化)
+# 重要: Stop-Process -Force だと Chrome が Cookies SQLite を書き出す前に殺され、
+#       次回起動時にログインセッションが失われる。CloseMainWindow で WM_CLOSE を送り、
+#       Chrome に正常終了させてから (最大 15 秒待機)、それでも残っていたら force kill する。
 if ($ownChromeProcId) {
-    Write-Log "起動した Chrome (PID=$ownChromeProcId) を終了します"
-    Stop-Process -Id $ownChromeProcId -Force -ErrorAction SilentlyContinue
+    Write-Log "起動した Chrome (PID=$ownChromeProcId) をグレースフル終了します (セッション永続化)"
+    try {
+        $proc = Get-Process -Id $ownChromeProcId -ErrorAction Stop
+        $closed = $proc.CloseMainWindow()
+        if ($closed) {
+            Write-Log "WM_CLOSE 送信成功。Chrome の正常終了を待機 (最大 15 秒)..."
+            $waited = 0
+            while (-not $proc.HasExited -and $waited -lt 15) {
+                Start-Sleep -Milliseconds 500
+                $waited += 0.5
+                $proc.Refresh()
+            }
+            if ($proc.HasExited) {
+                Write-Log "Chrome 正常終了 (待機 ${waited}s) — セッション永続化完了"
+            } else {
+                Write-Log "WARNING: 15 秒経っても Chrome が終了しないため force kill します"
+                Stop-Process -Id $ownChromeProcId -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            Write-Log "WARNING: CloseMainWindow が false を返しました (メインウィンドウなし?)。force kill します"
+            Stop-Process -Id $ownChromeProcId -Force -ErrorAction SilentlyContinue
+        }
+    } catch {
+        Write-Log "WARNING: グレースフル終了に失敗 ($($_.Exception.Message))。force kill にフォールバック"
+        Stop-Process -Id $ownChromeProcId -Force -ErrorAction SilentlyContinue
+    }
     # 子プロセス (renderer 等) も終了させるため少し待つ
     Start-Sleep -Seconds 2
 }

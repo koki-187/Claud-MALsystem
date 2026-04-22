@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-04-23 (Desktop) — TERASS ログイン永続化修正
+
+- **環境**: Desktop (Windows PowerShell / Task Scheduler)
+- **ブランチ**: master
+- **変更内容**: `scripts/run-auto-import.ps1` の Chrome 終了処理を `Stop-Process -Force` →
+  `CloseMainWindow()` 経由のグレースフル終了に変更。force kill だと Chrome が Cookies SQLite を
+  書き出す前にプロセスが消え、毎回 TERASS PICKS への再ログインが必要になっていた。
+  WM_CLOSE で正常終了 → 最大15秒待機 → タイムアウト時のみ force kill にフォールバック。
+  これによりユーザーが一度ログインすれば `Chrome_CDP` プロファイルにセッションが永続化される。
+- **デプロイ**: 不要 (PowerShell スクリプトのみ。Worker コードは無変更)
+- **同期**: `C:/Users/reale/Downloads/mal-worker/scripts/run-auto-import.ps1` にも反映済
+- **次のタスク**: 4/24 03:00 cron で再ログイン不要を実測確認
+
+---
+
 ## 2026-04-22 23:18 (Desktop) — 本番デプロイ完了 & 検証
 
 - **環境**: Desktop (Windows PowerShell)
