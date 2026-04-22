@@ -13,3 +13,4 @@ desktop.ini
 # Drive-synced data archive (do not commit)
 terass-exports/
 
+.claude/settings.json
