@@ -489,6 +489,11 @@ admin.post('/archive-cold', async (c) => {
 // ─── GET /api/admin/archive/list ─────────────────────────────────────────────
 admin.get('/archive/list', async (c) => {
   const prefix = c.req.query('prefix') ?? 'archive/properties/';
+  // P2 #10: prefix を archive/ 配下に制限。Bearer 認証越えていても、
+  // ?prefix=images/ で全画像を列挙されるのを防ぐ (R2 列挙コスト + 個人情報漏洩防御)。
+  if (!prefix.startsWith('archive/')) {
+    return c.json({ error: 'prefix must start with "archive/"' }, 400);
+  }
   try {
     const listed = await c.env.MAL_STORAGE.list({ prefix });
     const objects = (listed.objects ?? []).map(o => ({

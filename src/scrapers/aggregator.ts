@@ -48,15 +48,8 @@ function createScrapers(): Partial<Record<SiteId, BaseScraper>> {
   };
 }
 
-/**
- * Guard: returns true when ALL properties are mock data (every ID contains "mock_").
- * Empty arrays are treated as mock to avoid empty DB writes.
- * @deprecated Prefer isMockData() for per-site checks.
- */
-function isAllMockData(properties: Property[]): boolean {
-  if (properties.length === 0) return true;
-  return properties.every(p => p.sitePropertyId.includes('mock_'));
-}
+// isAllMockData は @deprecated だったため削除 (P2 #7 dead code 排除)。
+// 用途は isMockData() (per-site 判定) に置き換え済み。
 
 /**
  * Per-site mock guard: returns true when this site's result is pure mock data.
@@ -129,13 +122,17 @@ export async function aggregateSearch(
   const allProperties: Property[] = [];
   const siteResults: SiteSearchResult[] = [];
 
-  for (const result of results) {
+  // P2 #8: results と siteIds は同順なので index でペアリング。
+  // 旧: rejected 時に siteIds[siteResults.length] を使うと、それまでに push 済みの
+  // results 数とずれて誤った siteId が記録された (例: 0番目失敗→1番目成功→2番目失敗時に siteIds[1] を引く)。
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
     if (result.status === 'fulfilled') {
       allProperties.push(...result.value.properties);
       siteResults.push(result.value.result);
     } else {
       siteResults.push({
-        siteId: siteIds[siteResults.length] ?? ('suumo' as SiteId),
+        siteId: siteIds[i] ?? ('suumo' as SiteId),
         count: 0,
         status: 'error',
         errorMessage: result.reason?.message ?? 'Unknown error',
@@ -225,36 +222,41 @@ export async function runScheduledScrape(env: Bindings): Promise<{
           (existingRows.results ?? []).map(r => r.site_property_id)
         );
 
-        // ── Upsert scraped properties ─────────────────────────────────────────
+        // ── Upsert scraped properties (P2 #11: バッチ化で N+1 解消) ──────────
+        // 旧: 1 物件あたり 2 ラウンドトリップ × 最大 15 物件 × 9 サイト × 47 都道府県 = 12,690 順次クエリ
+        // 新: 50 件ずつまとめて env.MAL_DB.batch() に投入 → ラウンドトリップ ~1/50
+        const upsertSql = `
+          INSERT INTO properties (
+            id, site_id, site_property_id, title, property_type, status,
+            prefecture, city, address, price, price_text, area, building_area, land_area,
+            rooms, age, floor, total_floors, station, station_minutes,
+            thumbnail_url, detail_url, description, yield_rate, latitude, longitude,
+            fingerprint, last_seen_at,
+            created_at, updated_at, scraped_at
+          ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'), datetime('now'))
+          ON CONFLICT(site_id, site_property_id) DO UPDATE SET
+            title         = excluded.title,
+            price         = excluded.price,
+            price_text    = excluded.price_text,
+            area          = COALESCE(excluded.area, area),
+            thumbnail_url = COALESCE(excluded.thumbnail_url, thumbnail_url),
+            description   = COALESCE(excluded.description, description),
+            yield_rate    = COALESCE(excluded.yield_rate, yield_rate),
+            fingerprint   = excluded.fingerprint,
+            last_seen_at  = datetime('now'),
+            status        = CASE WHEN status = 'sold' THEN 'sold' ELSE 'active' END,
+            updated_at    = datetime('now'),
+            scraped_at    = datetime('now')
+        `;
+        const priceHistorySql = `INSERT OR IGNORE INTO price_history (property_id, price, recorded_at) VALUES (?, ?, ?)`;
+        const stmts: D1PreparedStatement[] = [];
         for (const prop of properties) {
           const id = `${prop.siteId}_${prop.sitePropertyId}`;
           const isNew = !existingSet.has(prop.sitePropertyId);
           if (isNew) jobNew++; else jobUpdated++;
 
-          await env.MAL_DB.prepare(`
-            INSERT INTO properties (
-              id, site_id, site_property_id, title, property_type, status,
-              prefecture, city, address, price, price_text, area, building_area, land_area,
-              rooms, age, floor, total_floors, station, station_minutes,
-              thumbnail_url, detail_url, description, yield_rate, latitude, longitude,
-              fingerprint, last_seen_at,
-              created_at, updated_at, scraped_at
-            ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), datetime('now'), datetime('now'))
-            ON CONFLICT(site_id, site_property_id) DO UPDATE SET
-              title         = excluded.title,
-              price         = excluded.price,
-              price_text    = excluded.price_text,
-              area          = COALESCE(excluded.area, area),
-              thumbnail_url = COALESCE(excluded.thumbnail_url, thumbnail_url),
-              description   = COALESCE(excluded.description, description),
-              yield_rate    = COALESCE(excluded.yield_rate, yield_rate),
-              fingerprint   = excluded.fingerprint,
-              last_seen_at  = datetime('now'),
-              status        = CASE WHEN status = 'sold' THEN 'sold' ELSE 'active' END,
-              updated_at    = datetime('now'),
-              scraped_at    = datetime('now')
-          `).bind(
+          stmts.push(env.MAL_DB.prepare(upsertSql).bind(
             id, prop.siteId, prop.sitePropertyId, prop.title, prop.propertyType,
             prop.prefecture, prop.city ?? '', prop.address ?? null,
             prop.price ?? null, prop.priceText ?? '', prop.area ?? null,
@@ -264,15 +266,14 @@ export async function runScheduledScrape(env: Bindings): Promise<{
             prop.thumbnailUrl ?? null, prop.detailUrl, prop.description ?? null,
             prop.yieldRate ?? null, prop.latitude ?? null, prop.longitude ?? null,
             prop.fingerprint ?? null
-          ).run();
-
-          // ── Price history (one entry per property per day) ──────────────────
+          ));
           if (prop.price !== null) {
-            await env.MAL_DB.prepare(`
-              INSERT OR IGNORE INTO price_history (property_id, price, recorded_at)
-              VALUES (?, ?, ?)
-            `).bind(id, prop.price, today).run();
+            stmts.push(env.MAL_DB.prepare(priceHistorySql).bind(id, prop.price, today));
           }
+        }
+        // 50 文ずつチャンク実行 (D1 batch のオーバーヘッドを抑えつつ単発失敗の影響を局所化)
+        for (let i = 0; i < stmts.length; i += 50) {
+          await env.MAL_DB.batch(stmts.slice(i, i + 50));
         }
 
         // ── Mark sold: active properties not seen in the last 48 hours ────────
@@ -323,14 +324,17 @@ export async function runScheduledScrape(env: Bindings): Promise<{
 
 function filterProperties(props: Property[], params: SearchParams): Property[] {
   return props.filter(p => {
-    if (params.priceMin !== undefined && p.price !== null && p.price < params.priceMin) return false;
-    if (params.priceMax !== undefined && p.price !== null && p.price > params.priceMax) return false;
-    if (params.areaMin  !== undefined && p.area  !== null && p.area  < params.areaMin)  return false;
-    if (params.areaMax  !== undefined && p.area  !== null && p.area  > params.areaMax)  return false;
+    // P2 #12: 数値範囲フィルタ指定時は null を「不明=フィルタ対象外として除外」する仕様に統一。
+    // 旧: `p.price !== null && p.price < min` は null だと条件 false→通過していたため、
+    // 価格未取得の物件が「100万〜500万」の絞り込みでも結果に混入していた。
+    if (params.priceMin !== undefined && (p.price === null || p.price < params.priceMin)) return false;
+    if (params.priceMax !== undefined && (p.price === null || p.price > params.priceMax)) return false;
+    if (params.areaMin  !== undefined && (p.area  === null || p.area  < params.areaMin))  return false;
+    if (params.areaMax  !== undefined && (p.area  === null || p.area  > params.areaMax))  return false;
     if (params.rooms        && p.rooms        !== params.rooms)        return false;
-    if (params.ageMax  !== undefined && p.age   !== null && p.age    > params.ageMax)   return false;
-    if (params.stationMinutes !== undefined && p.stationMinutes !== null && p.stationMinutes > params.stationMinutes) return false;
-    if (params.yieldMin !== undefined && p.yieldRate !== null && p.yieldRate < params.yieldMin) return false;
+    if (params.ageMax  !== undefined && (p.age   === null || p.age    > params.ageMax))   return false;
+    if (params.stationMinutes !== undefined && (p.stationMinutes === null || p.stationMinutes > params.stationMinutes)) return false;
+    if (params.yieldMin !== undefined && (p.yieldRate === null || p.yieldRate < params.yieldMin)) return false;
     if (params.query) {
       const q = params.query.toLowerCase();
       if (!`${p.title} ${p.address ?? ''} ${p.description ?? ''}`.toLowerCase().includes(q)) return false;

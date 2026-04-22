@@ -65,6 +65,15 @@ app.use('/api/search', async (c, next) => {
   await next();
 });
 
+// P2 #9: /api/search/master も同等の D1 負荷をかけるので 60 req/min レート制限を追加。
+// 旧: 無制限で叩けたため abuse → D1 過負荷リスクあり。バケット分離 (search-master:) で /api/search と独立カウント。
+app.use('/api/search/master', async (c, next) => {
+  const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
+  const allowed = await checkRateLimit(c.env.MAL_CACHE, `search-master:${ip}`, 60, 60);
+  if (!allowed) return c.json({ error: 'Too Many Requests' }, 429);
+  await next();
+});
+
 // 5 req/min per IP on /api/scrape/run
 app.use('/api/scrape/run', async (c, next) => {
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
