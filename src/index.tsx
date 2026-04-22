@@ -208,15 +208,11 @@ app.get('/api/scrape/status', async (c) => {
   }
 });
 
-app.post('/api/scrape/run', async (c) => {
-  try {
-    const result = await runScheduledScrape(c.env);
-    return c.json({ success: true, ...result });
-  } catch (error) {
-    console.error('[/api/scrape/run] error:', error);
-    return c.json({ success: false, error: 'Internal error' }, 500);
-  }
-});
+// /api/scrape/run は廃止 (認証なし公開エンドポイントのため外部スクレイプ誤トリガーリスク)
+// 同等機能は POST /api/admin/scrape (Bearer 認証必須) を使用してください。
+app.post('/api/scrape/run', (c) => c.json({
+  error: 'Endpoint removed. Use POST /api/admin/scrape with Bearer auth instead.',
+}, 410));
 
 app.get('/manifest.json', (c) => c.json({
   name: 'MAL検索システム',
@@ -322,12 +318,8 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
   const hour = new Date(event.scheduledTime).getUTCHours();
   if (hour === 4) {
     // 画像ダウンロードキュー処理 (UTC 4時 = JST 13時)
-    ctx.waitUntil(
-      fetch(`${env.WORKER_URL ?? 'http://localhost:8787'}/api/admin/download-queue/process`, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${env.ADMIN_SECRET ?? ''}` },
-      }).catch(console.error)
-    );
+    // ADMIN_SECRET 未設定でも動くよう HTTP self-call をやめ直接関数呼び出しに変更 (大バッチ処理)
+    ctx.waitUntil(processQueue(env, 500).catch(console.error));
   } else {
     ctx.waitUntil(runScheduledScrape(env));
   }
@@ -340,14 +332,28 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
     }
   }).catch(console.error));
   // D1容量監視: free tier 5GB (5120MB) の 80% (4096MB) 超で自動アーカイブ
-  // PRAGMA page_count × page_size で実サイズを取得 (行数概算より高精度)
+  // PRAGMA page_count × page_size で実サイズを取得。失敗時は行数 × 635B の概算にフォールバック。
   ctx.waitUntil((async () => {
     try {
-      const pc = await env.MAL_DB.prepare('PRAGMA page_count').first<{ page_count: number }>();
-      const ps = await env.MAL_DB.prepare('PRAGMA page_size').first<{ page_size: number }>();
-      const mb = pc && ps ? (pc.page_count * ps.page_size) / 1024 / 1024 : 0;
+      let mb = 0;
+      let source = 'pragma';
+      try {
+        const pc = await env.MAL_DB.prepare('PRAGMA page_count').first<{ page_count: number }>();
+        const ps = await env.MAL_DB.prepare('PRAGMA page_size').first<{ page_size: number }>();
+        if (pc?.page_count && ps?.page_size) {
+          mb = (pc.page_count * ps.page_size) / 1024 / 1024;
+        }
+      } catch (pragmaErr) {
+        console.warn('[D1-CAPACITY] PRAGMA failed, falling back to row-count estimate:', pragmaErr);
+      }
+      if (mb === 0) {
+        // フォールバック: 1行 ≈ 635 バイトの概算 (admin.ts と同じ係数)
+        const cap = await env.MAL_DB.prepare('SELECT COUNT(*) AS n FROM properties').first<{ n: number }>();
+        mb = ((cap?.n ?? 0) * 635) / 1024 / 1024;
+        source = 'estimated';
+      }
       if (mb >= 4096) {
-        console.error(`[D1-CAPACITY-ALERT] ${mb.toFixed(0)}MB >= 4096MB (80% of 5GB) — starting auto-archive`);
+        console.error(`[D1-CAPACITY-ALERT] ${mb.toFixed(0)}MB >= 4096MB (80% of 5GB, source=${source}) — starting auto-archive`);
         const result = await archiveOldestCold(env, 5, 2000);
         console.log(`[D1-AUTO-ARCHIVE] archived=${result.archived} deleted=${result.deleted} keys=${result.r2Keys.length}`);
       }
