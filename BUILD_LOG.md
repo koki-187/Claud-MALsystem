@@ -840,3 +840,38 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
 ### 次のタスク
 - 03:00 cron 結果確認 (`terass_cron.log` 末尾)
 
+## 2026-04-23 03:04 (Desktop)
+- **環境**: Desktop (Windows / Git Bash)
+- **ブランチ**: master
+- **変更内容**: 03:00 cron 起動結果の確認 (コード変更なし)
+- **デプロイ**: 不要
+
+### 03:00 自動実行ログ抜粋
+```
+[03:00:01] TERASS auto-import 開始
+[03:00:03] Chrome 起動: PID=36872
+[03:00:04] CDP 応答 OK (待機 0s)                     ← PS1 修正全部効いている
+[03:00:04] auto-import-terass.sh を実行中...
+[03:00:05] ERROR: TERASS PICKS タブが見つかりません  ← OAuth 画面に遷移 = 未ログイン
+[03:00:07] TERASS auto-import 終了 (exit=1)
+```
+
+### 確認できたこと (パイプライン 100% 動作)
+| 検証項目 | 結果 |
+|---|---|
+| Task Scheduler 起動時刻 | ✅ 03:00:01 (定刻) |
+| PS1 構文 (BOM 修正) | ✅ パースエラー無 |
+| CDP IPv4 検知 (`127.0.0.1:9222`) | ✅ 0 秒で OK |
+| Chrome 自動起動 (PID=36872) | ✅ |
+| `bash -lc` → `auto-import-terass.sh` チェーン | ✅ 起動 |
+| `extract-terass.mjs` → CDP attach | ✅ 接続 |
+| Chrome 自動終了 (own PID のみ) | ✅ クリーン |
+
+### 残課題: TERASS PICKS ログイン (一度限り)
+- 現状: extract-terass.mjs が「TERASS タブが見つからない」で異常終了
+- 原因: Chrome_CDP プロファイル (`%APPDATA%\Chrome_CDP`) が TERASS にログイン未済 → OAuth 画面に遷移
+- 対処: 一度手動で TERASS PICKS にログインすればクッキー永続化 → 翌日 03:00 から完全自動化
+
+### 次のタスク
+- TERASS PICKS 手動ログイン → 4/24 03:00 cron で完全自動化を最終確認
+
