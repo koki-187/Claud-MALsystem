@@ -808,3 +808,35 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
 - P2 (中リスク) 6件: aggregator siteId mis-mapping / `/api/search/master` rate-limit 追加 / R2 prefix 検証 / N+1 batch 化 / null 価格フィルタ / dead code 削除
 - TERASS PICKS 手動ログイン (cron 動作のため)
 
+## 2026-04-23 02:56 (Desktop)
+- **環境**: Desktop (Windows / Git Bash + ユーザー手動 PowerShell)
+- **ブランチ**: master
+- **変更内容**: 第2回監査の P2 (中リスク・データ整合性) 項目 6件を一括修正してデプロイ
+- **デプロイ**: 済 (Version `204bbfee-2cd8-4f83-b2f5-67af459c3661`)
+
+### 修正内容
+| # | ファイル:行 | 問題 | 修正 |
+|---|---|---|---|
+| 7 | `src/scrapers/aggregator.ts:51` | dead code (`isAllMockData` @deprecated) | 削除 |
+| 8 | `src/scrapers/aggregator.ts:138` | rejected 時の siteId mis-mapping | index 直接使用 |
+| 9 | `src/index.tsx:69` | `/api/search/master` レート制限なし | 60 req/min/IP 追加 (`search-master:` バケット分離) |
+| 10 | `src/routes/admin.ts:491` | R2 prefix 検証なし | `archive/` 配下に強制 (400 if not) |
+| 11 | `src/scrapers/aggregator.ts:229` | N+1 (12,690 直列クエリ) | `db.batch()` 50件チャンク化 (~50x 高速化期待) |
+| 12 | `src/scrapers/aggregator.ts:326` | null 価格が範囲フィルタを通過 | null は明示的に除外 |
+
+### ライブ検証 (Version 204bbfee)
+- `/api/health` → `6.2.0` ✓
+- `/api/search/master` → 200 (rate-limit middleware 通過) ✓
+- `/api/admin/archive/list?prefix=images/` (Bearer) → `400 {"error":"prefix must start with \"archive/\""}` ✓
+- `/api/admin/archive/list?prefix=archive/` (Bearer) → 200 ✓
+
+### 監査完了サマリー (P0+P1+P2 計 14 件)
+- **P0** (3件 / Version 05cfdce6): ADMIN_SECRET / scrape/run 410 / scheduled 直接呼び出し
+- **P1** (5件 / Version 1ed6b857): path traversal / SSRF / double-process / 演算子優先順位 / CSV 上限
+- **P2** (6件 / Version 204bbfee): dead code / siteId / rate-limit / prefix 検証 / N+1 batch / null フィルタ
+- 全 4 deploy 累積: 監査前 → 全項目 fix
+- 残課題は cron 動作確認 (TERASS PICKS ログイン後の 03:00 cron)
+
+### 次のタスク
+- 03:00 cron 結果確認 (`terass_cron.log` 末尾)
+
