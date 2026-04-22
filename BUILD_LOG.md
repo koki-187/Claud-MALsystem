@@ -5,6 +5,49 @@
 
 ---
 
+## 2026-04-22 23:18 (Desktop) — 本番デプロイ完了 & 検証
+
+- **環境**: Desktop (Windows PowerShell)
+- **ブランチ**: master
+- **デプロイ**: ✅ 完了
+- **Version ID**: `475c6159-f434-4bd4-a145-1e56b1fb6743`
+- **Upload size**: 833.63 KiB (gzip: 187.25 KiB)
+- **Worker Startup Time**: 26 ms
+
+### wrangler deploy 結果
+- Cloudflare OAuth ログイン (navigator.koki@gmail.com) → wrangler 認可 → deploy 自動続行
+- triggers: `0 3 * * *`, `0 9 * * *`, `0 15 * * *`, `0 21 * * *`, `*/15 * * * *` 全て更新
+- bindings: MAL_DB / MAL_CACHE / MAL_STORAGE / APP_VERSION=6.2.0 / WORKER_URL 反映確認
+
+### 検証結果
+| 項目 | 期待値 | 実測値 | 結果 |
+|------|--------|--------|------|
+| `/api/health` version | 6.2.0 | 6.2.0 | ✅ |
+| D1 実サイズ | PRAGMA で取得可能 | 479.6 MB (`size_after` フィールド) | ✅ |
+| D1 上限 | 5120 MB (free tier 5GB) | 9.4% 使用 | ✅ 余裕 |
+| properties 件数 | ≥ 450,977 | 451,012 (+35 差分追加) | ✅ |
+| master_properties 件数 | ≥ 356,824 | 356,850 (+26) | ✅ |
+| sold_delisted | 0 (R2 退避済) | 0 | ✅ |
+
+### 解消された所見
+- 🔴 **C1**: `run-auto-import.bat` の fallback 迂回 → PS1 版で sh 経由に変更済
+- 🔴 **C2**: 03:00 実行時の Chrome CDP 未起動 → PS1 で自動起動+待機
+- 🔴 **C3**: `extract-terass.mjs` CONVERT_SCRIPT デフォルトパス誤り → 修正済
+- 🟠 **M1**: D1 容量計算の行数概算 → PRAGMA 実測化 + 上限 5GB 修正
+- 🟠 **M2/M3**: health check の Bearer 認証欠損 → 付与 + 未設定時スキップ
+- 🟡 **m4**: `WORKER_URL` 未定義 → `wrangler.toml` に追加
+- 🟡 バージョン表記不整合 → 6.2.0 に統一
+- 🟡 定数時間比較が非定数時間 → SHA-256 ベース `timingSafeEqualStr` 実装
+- 🟡 `terass_cron.log` 無限増大 → PS1 内で 5MB 超で日付ローテーション、30日で削除
+- 🟡 `.claude/settings.json` 誤トラッキング → gitignore 追加 + 除外
+
+### 次のタスク
+1. 翌朝 03:00 の Task Scheduler 自動実行ログ確認 (`C:/Users/reale/Downloads/terass_cron.log`)
+2. `ADMIN_SECRET` の設定 (`wrangler secret put ADMIN_SECRET` → 任意の強力な token。現状 Worker 側は 503 を返すが importer 側は fallback で静かに失敗する)
+3. `CLOUDFLARE_API_TOKEN` の setx 設定 (将来の deploy を完全自動化したい場合)
+
+---
+
 ## 2026-04-22 22:40 (Desktop) — システム包括レビュー & 改善実装
 
 - **環境**: Desktop (Windows / Git Bash)
