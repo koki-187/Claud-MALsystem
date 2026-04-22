@@ -570,6 +570,63 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
 
 ### 次のタスク
 1. wrangler Task Scheduler で日次自動抽出 (Chrome CDP起動 → `auto-import-terass.sh`)
-2. 成約済CSVをR2に追加投入 (容量考慮: ~250MB必要、要D1 paid移行検討)
+2. ~~成約済CSVをR2に追加投入~~ → **完了** (下記参照)
 3. `terass_convert_and_import.mjs` の API_URL/Auth バグ修正
+
+---
+
+## 2026-04-22 22:01 (Desktop)
+- **環境**: Desktop (Windows / Git Bash)
+- **ブランチ**: master
+- **変更内容**: 成約済CSV (mansion/house/land) を R2 archive に投入
+- **デプロイ**: 不要 (R2 直接操作)
+
+### R2 投入結果
+| Object Key | サイズ |
+|-----------|--------|
+| `archive/sold/2026-04-21/terass_mansion_sold.csv.gz` | 8,632,241 B (8.6 MB) |
+| `archive/sold/2026-04-21/terass_house_sold.csv.gz`   | 9,686,289 B (9.7 MB) |
+| `archive/sold/2026-04-21/terass_land_sold.csv.gz`    | 8,708,334 B (8.7 MB) |
+| **合計** | **約 27 MB (gzip圧縮済)** |
+
+### 解決したエラー
+- **Windows libuv assertion + USAGE 出力**: `wrangler r2 object put` で `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` が発生
+- **原因**: `--remote` フラグが wrangler 3.114 の `r2 object put` では未対応 (default が remote)
+- **修正**: `--remote` を削除 → 3 ファイル全て upload 成功
+- **検証**: `wrangler r2 object get --pipe | wc -c` でサイズ完全一致確認
+
+### 次のタスク
+1. ~~Task Scheduler 設定~~ → **完了** (下記参照)
+2. ~~`terass_convert_and_import.mjs` リポジトリ反映~~ → **完了** (下記参照)
+
+---
+
+## 2026-04-22 22:18 (Desktop)
+- **環境**: Desktop (Windows / Git Bash)
+- **ブランチ**: master
+- **変更内容**: 残り保留タスク2件を解消 (importer リポジトリ反映 + 日次自動実行)
+- **デプロイ**: 不要 (CFリソース変更なし)
+
+### importer をリポジトリへ移動
+- `C:/Users/reale/Downloads/terass_convert_and_import.mjs` (修正済) → `scripts/terass_convert_and_import.mjs` にコピー
+- 修正内容: `API_URL` 既定値を `mal-search-system.navigator-187.workers.dev` に修正、`ADMIN_SECRET` 環境変数で Bearer 認証付与
+- `scripts/auto-import-terass.sh`: `IMPORT_SCRIPT` 既定値を `${PROJECT_DIR}/scripts/terass_convert_and_import.mjs` に変更 (旧: 存在しない `d1_bulk_import_v2.mjs`)
+- `C:/Users/reale/Downloads/mal-worker/scripts/` にも同期 (Task Scheduler 実行先)
+
+### Task Scheduler 登録
+- **タスク名**: `TERASS-PICKS-Auto-Import`
+- **スケジュール**: 毎日 03:00
+- **トリガ実体**: `C:/Users/reale/Downloads/mal-worker/scripts/run-auto-import.bat`
+  - 内部で `bash -lc "node scripts/extract-terass.mjs >> /c/Users/reale/Downloads/terass_cron.log 2>&1"`
+- **作成方法**: `schtasks /Create /TN ... /SC DAILY /ST 03:00 /F`
+- **検証**: `schtasks /Query /TN TERASS-PICKS-Auto-Import` で `次回の実行時刻 2026/04/23 3:00:00 / 状態: 準備完了` を確認
+
+### Chrome CDP 起動
+- `C:/Users/reale/Downloads/mal-worker/scripts/Chrome_CDP.bat` を作成 (ポート 9222 + 専用 user-data-dir)
+- 推奨: スタートアップフォルダにショートカット配置 (`shell:startup`) でログイン時に自動起動
+- ログインセッションは `%APPDATA%\Chrome_CDP` で永続化されるので初回手動ログインのみ必要
+
+### 次のタスク
+- 翌朝 03:00 の自動実行ログ (`/c/Users/reale/Downloads/terass_cron.log`) を確認して動作検証
+- `ADMIN_SECRET` を設定する場合: タスクの追加環境変数として `setx ADMIN_SECRET ...` (現状は wrangler 直接 SQL 経由で迂回中なので未設定でも可)
 

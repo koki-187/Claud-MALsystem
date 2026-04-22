@@ -38,7 +38,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 CSV_DIR="${TERASS_CSV_DIR:-C:/Users/reale/Downloads/TERASS_MAL_converted}"
-IMPORT_SCRIPT="${IMPORT_SCRIPT:-C:/Users/reale/Downloads/d1_bulk_import_v2.mjs}"
+IMPORT_SCRIPT="${IMPORT_SCRIPT:-${PROJECT_DIR}/scripts/terass_convert_and_import.mjs}"
 EXTRACT_SCRIPT="${PROJECT_DIR}/scripts/extract-terass.mjs"
 LOG_DIR="${LOG_DIR:-C:/Users/reale/Downloads}"
 LOG_FILE="${LOG_DIR}/terass_auto_import_$(date +%Y%m%d_%H%M%S).log"
