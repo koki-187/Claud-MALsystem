@@ -16,12 +16,33 @@
 
 $ErrorActionPreference = 'Continue'  # 個別エラーで全体停止しないように
 $LogFile = 'C:\Users\reale\Downloads\terass_cron.log'
+$LogMaxBytes = 5MB                     # 5MB 超で日付付きアーカイブにローテーション
+$LogRetainDays = 30                    # 30日以上前のローテーションログを削除
 $ProjectDir = 'C:\Users\reale\Downloads\mal-worker'
 $BashExe = 'C:\Program Files\Git\bin\bash.exe'
 $ChromeExe = 'C:\Program Files\Google\Chrome\Application\chrome.exe'
 $UserDataDir = "$env:APPDATA\Chrome_CDP"
 $CdpPort = 9222
 $WaitTimeoutSec = 30
+
+# ログローテーション: 起動時に LogFile が閾値超なら日付付きにリネーム + 古いものを削除
+function Invoke-LogRotation {
+    if (Test-Path $LogFile) {
+        $size = (Get-Item $LogFile).Length
+        if ($size -ge $LogMaxBytes) {
+            $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+            $rotated = "$LogFile.$stamp"
+            Move-Item -Path $LogFile -Destination $rotated -Force
+        }
+    }
+    # 古いローテーションログを削除
+    $logDir = Split-Path -Parent $LogFile
+    $logBase = Split-Path -Leaf $LogFile
+    Get-ChildItem -Path $logDir -Filter "$logBase.*" -ErrorAction SilentlyContinue |
+        Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-$LogRetainDays) } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+}
+Invoke-LogRotation
 
 function Write-Log {
     param([string]$Message)

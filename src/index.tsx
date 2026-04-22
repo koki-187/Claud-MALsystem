@@ -282,6 +282,20 @@ app.get('/api/transactions', async (c) => {
 // =====================
 // Admin Routes (Bearer token認証必須)
 // =====================
+// 定数時間比較 (Web Crypto ベース。Workers ランタイム互換)
+async function timingSafeEqualStr(a: string, b: string): Promise<boolean> {
+  // 異なる長さでも常に同じ計算量を払うため、両方を SHA-256 でハッシュしてから XOR 比較
+  const enc = new TextEncoder();
+  const [ha, hb] = await Promise.all([
+    crypto.subtle.digest('SHA-256', enc.encode(a)),
+    crypto.subtle.digest('SHA-256', enc.encode(b)),
+  ]);
+  const ua = new Uint8Array(ha), ub = new Uint8Array(hb);
+  let diff = a.length === b.length ? 0 : 1;
+  for (let i = 0; i < ua.length; i++) diff |= ua[i] ^ ub[i];
+  return diff === 0;
+}
+
 app.use('/api/admin/*', async (c, next) => {
   const expected = c.env.ADMIN_SECRET;
   if (!expected) {
@@ -289,8 +303,7 @@ app.use('/api/admin/*', async (c, next) => {
   }
   const auth = c.req.header('Authorization') ?? '';
   const provided = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  // 定数時間比較 (timing attack 緩和)
-  if (provided.length !== expected.length || provided !== expected) {
+  if (!(await timingSafeEqualStr(provided, expected))) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
   await next();
