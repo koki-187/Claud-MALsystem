@@ -243,8 +243,19 @@ app.get('/api/suggest', async (c) => {
 
 // R2 image delivery
 app.get('/api/images/*', async (c) => {
-  const key = c.req.path.replace('/api/images/', '');
-  if (!key) return c.notFound();
+  const rawKey = c.req.path.replace('/api/images/', '');
+  if (!rawKey) return c.notFound();
+  // パストラバーサル防御: '..', 先頭スラッシュ, NUL, デコード後のパス分離を全て拒否
+  // URL デコードしたうえで判定 (例: %2e%2e で .. を表現する攻撃をブロック)
+  let key: string;
+  try { key = decodeURIComponent(rawKey); } catch { return c.notFound(); }
+  if (
+    key.includes('..') ||
+    key.startsWith('/') ||
+    key.startsWith('\\') ||
+    key.includes('\0') ||
+    key.includes('://')
+  ) return c.notFound();
   try {
     const obj = await c.env.MAL_STORAGE.get(key);
     if (!obj) return c.notFound();
@@ -317,14 +328,15 @@ app.get('*', (c) => c.html(getHTML()));
 const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) => {
   const hour = new Date(event.scheduledTime).getUTCHours();
   if (hour === 4) {
-    // 画像ダウンロードキュー処理 (UTC 4時 = JST 13時)
-    // ADMIN_SECRET 未設定でも動くよう HTTP self-call をやめ直接関数呼び出しに変更 (大バッチ処理)
+    // 画像ダウンロードキュー処理 (UTC 4時 = JST 13時) — 大バッチ
+    // ADMIN_SECRET 未設定でも動くよう HTTP self-call をやめ直接関数呼び出しに変更
     ctx.waitUntil(processQueue(env, 500).catch(console.error));
   } else {
     ctx.waitUntil(runScheduledScrape(env));
+    // 毎時 (UTC 4時以外): 画像キューを最大50件処理
+    // hour===4 のとき同時走行すると download_queue で同一行を二重処理してR2書き込み競合するため除外
+    ctx.waitUntil(processQueue(env, 50).catch(console.error));
   }
-  // 毎時: 画像キューを最大50件処理
-  ctx.waitUntil(processQueue(env, 50).catch(console.error));
   // 毎時: 未リンク properties を master_properties に変換 (最大5000件)
   ctx.waitUntil(buildMasters(env, 5000).then(r => {
     if (r.created + r.updated > 0) {

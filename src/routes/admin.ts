@@ -125,20 +125,28 @@ admin.get('/export.csv', async (c) => {
   const writer = writable.getWriter();
   const enc = new TextEncoder();
 
+  // CPU/メモリ暴走防御: ?max_rows= で上限指定 (デフォルト 100,000、最大 500,000)
+  // properties は 60 万件超のため上限なしだと Worker の 30s CPU 制限を超過する
+  const maxRows = Math.min(Number(c.req.query('max_rows') ?? 100000) || 100000, 500000);
+
   c.executionCtx.waitUntil((async () => {
     try {
       await writer.write(enc.encode(HEADER + '\n'));
       let offset = 0;
-      while (true) {
+      let written = 0;
+      while (written < maxRows) {
+        const remaining = maxRows - written;
+        const pageLimit = Math.min(1000, remaining);
         const rows = await env.MAL_DB.prepare(
-          `SELECT * FROM properties WHERE ${whereClause} LIMIT 1000 OFFSET ?`
-        ).bind(...bindings, offset).all<Record<string, unknown>>();
+          `SELECT * FROM properties WHERE ${whereClause} LIMIT ? OFFSET ?`
+        ).bind(...bindings, pageLimit, offset).all<Record<string, unknown>>();
         if (!rows.results?.length) break;
         for (const row of rows.results) {
           await writer.write(enc.encode(rowToCsv(row) + '\n'));
+          written++;
         }
-        offset += 1000;
-        if (rows.results.length < 1000) break;
+        offset += pageLimit;
+        if (rows.results.length < pageLimit) break;
       }
     } finally {
       await writer.close();
@@ -309,51 +317,14 @@ admin.get('/duplicates', async (c) => {
 });
 
 // ─── POST /api/admin/download-queue/process ───────────────────────────────────
+// SSRF 防御を備えた共通実装 (image-pipeline.processQueue) に統一。
+// 旧コードの processDownloadItem は isUrlSafeToFetch を呼ばずに任意 URL を fetch していたため
+// 攻撃者が download_queue.source_url に内部 IP を仕込めば SSRF 可能だった。
 admin.post('/download-queue/process', async (c) => {
-  const env = c.env;
-  const db = env.MAL_DB;
-
-  const items = await db.prepare(`
-    SELECT * FROM download_queue
-    WHERE status = 'pending' AND retry_count < 3
-    ORDER BY created_at ASC
-    LIMIT 50
-  `).all<Record<string, unknown>>();
-
-  const results = items.results ?? [];
-  let processed = 0, failed = 0;
-
-  for (let i = 0; i < results.length; i += 5) {
-    const batch = results.slice(i, i + 5);
-    const settled = await Promise.allSettled(batch.map(item => processDownloadItem(item, env)));
-    for (const r of settled) {
-      if (r.status === 'fulfilled') processed++; else failed++;
-    }
-  }
-
-  return c.json({ processed, failed, total: results.length });
+  const limit = Math.min(Number(c.req.query('limit') ?? 50) || 50, 500);
+  const result = await processQueue(c.env, limit);
+  return c.json(result);
 });
-
-async function processDownloadItem(item: Record<string, unknown>, env: Bindings): Promise<void> {
-  const r2Key = `${item.asset_type}/${item.property_id}/${Date.now()}.jpg`;
-  try {
-    const resp = await fetch(item.source_url as string, { signal: AbortSignal.timeout(10000) });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const buf = await resp.arrayBuffer();
-    const ct = resp.headers.get('content-type') ?? 'application/octet-stream';
-    await env.MAL_STORAGE.put(r2Key, buf, { httpMetadata: { contentType: ct } });
-    await env.MAL_DB.prepare(`
-      UPDATE download_queue SET status='done', r2_key=?, file_size_bytes=?, content_type=?, processed_at=datetime('now')
-      WHERE id=?
-    `).bind(r2Key, buf.byteLength, ct, item.id as string).run();
-  } catch (e) {
-    await env.MAL_DB.prepare(`
-      UPDATE download_queue SET status=CASE WHEN retry_count>=2 THEN 'failed' ELSE 'pending' END,
-        retry_count=retry_count+1, error_message=?, processed_at=datetime('now')
-      WHERE id=?
-    `).bind(String(e), item.id as string).run();
-  }
-}
 
 // ─── POST /api/admin/images/enqueue-all ──────────────────────────────────────
 admin.post('/images/enqueue-all', async (c) => {

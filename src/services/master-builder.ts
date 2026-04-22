@@ -196,7 +196,9 @@ export async function buildMasters(
       g.first_listed_at ?? null, g.last_seen_at ?? null,
     ).run();
 
-    if ((upsertResult.meta?.changes as number | undefined) ?? 0 > 0) {
+    // 演算子優先順位: ?? は > より低いため括弧必須。これがないと `?? (0 > 0)` と評価され
+    // 常に `changes ?? false` → 真値判定で必ず created++ になり updated カウントが永遠に0だった。
+    if (((upsertResult.meta?.changes as number | undefined) ?? 0) > 0) {
       created++;
     } else {
       updated++;
