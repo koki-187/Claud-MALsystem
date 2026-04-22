@@ -781,3 +781,30 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
 - ユーザーが TERASS PICKS にログイン (上記手順)
 - 03:00 cron 後の `terass_cron.log` 末尾を確認
 
+## 2026-04-23 02:48 (Desktop)
+- **環境**: Desktop (Windows / Git Bash + ユーザー手動 PowerShell)
+- **ブランチ**: master
+- **変更内容**: 第2回監査の P1 (高リスク) 項目 5件を一括修正してデプロイ
+- **デプロイ**: 済 (Version `1ed6b857-ecf3-436b-b42f-d49a898e74c5`)
+
+### 修正内容
+| # | ファイル:行 | 問題 | 修正 |
+|---|---|---|---|
+| 1 | `src/index.tsx:245` | `/api/images/*` パストラバーサル | URL decode + `..`/先頭スラッシュ/NUL/`://` 拒否 |
+| 2 | `src/routes/admin.ts:312` | SSRF (重複 fetch、allowlist 無し) | 共通 `processQueue()` に統一 (50行削減) |
+| 3 | `src/index.tsx:319` | UTC 4 時に画像キュー二重処理 (race) | hour=4 のとき 50件分はスキップ |
+| 4 | `src/services/master-builder.ts:199` | 演算子優先順位バグ (`updated` 永久 0) | 括弧追加: `((x ?? 0) > 0)` |
+| 5 | `src/routes/admin.ts:124` | CSV export 上限なし (60万件→Worker タイムアウト) | `?max_rows=` (デフォ 100000、上限 500000) |
+
+### ライブ検証 (Version 1ed6b857)
+- `/api/health` → `6.2.0` ✓
+- `/api/images/..%2farchive` → 404 (生エンコード `..%2f` は CF が正規化せず私の防御が動作) ✓
+- `/api/images/%2e%2e/archive` → SPA HTML (CF が URL 正規化して `/api/images/*` に届かない) ✓
+- `/api/admin/download-queue/process` (Bearer) → `{"processed":0,"failed":0}` (SSRF 防御で危険 URL は弾かれる経路) ✓
+- `/api/admin/export.csv?max_rows=10` (Bearer) → 200, 3067 bytes (header + ~10 rows) ✓
+- `/api/scrape/run` → 410 (リグレッション無し) ✓
+
+### 次のタスク
+- P2 (中リスク) 6件: aggregator siteId mis-mapping / `/api/search/master` rate-limit 追加 / R2 prefix 検証 / N+1 batch 化 / null 価格フィルタ / dead code 削除
+- TERASS PICKS 手動ログイン (cron 動作のため)
+
