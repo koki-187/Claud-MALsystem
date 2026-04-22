@@ -713,3 +713,32 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
 - 翌朝 03:00 の自動実行ログ (`/c/Users/reale/Downloads/terass_cron.log`) を確認して動作検証
 - `ADMIN_SECRET` を設定する場合: タスクの追加環境変数として `setx ADMIN_SECRET ...` (現状は wrangler 直接 SQL 経由で迂回中なので未設定でも可)
 
+## 2026-04-22 23:40 (Desktop)
+- **環境**: Desktop (Windows / Git Bash)
+- **ブランチ**: master
+- **変更内容**: 第2回監査で抽出した最優先3件を実装してデプロイ
+- **デプロイ**: 済 (Version `05cfdce6-386f-4623-9b50-d35d129b4901`)
+
+### 実装内容
+1. **ADMIN_SECRET 設定** (`wrangler secret put ADMIN_SECRET`)
+   - 値: 64文字ランダムトークン (運用ログに記録済み)
+   - 効果: `/api/admin/*` 全エンドポイントが Bearer 認証で保護
+2. **`/api/scrape/run` 削除** (`src/index.tsx`)
+   - 旧: 認証なし公開エンドポイント (誰でもスクレイプ起動可能)
+   - 新: `410 Gone` を返却し `/api/admin/scrape` への移行を案内
+3. **scheduled handler の self-call を直接関数呼び出しに変更** (`src/index.tsx`)
+   - 旧: `fetch(WORKER_URL + '/api/admin/download-queue/process')` (ADMIN_SECRET 未設定だと 401)
+   - 新: `ctx.waitUntil(processQueue(env, 500).catch(console.error))`
+   - 効果: secret 設定有無に関わらず cron で常に動作
+
+### ライブ検証 (Version 05cfdce6)
+- `/api/health` → `{"status":"ok","version":"6.2.0","sites":12}` ✓
+- `POST /api/scrape/run` → `410` ✓
+- `/api/admin/d1-capacity` (Bearer) → `{"totalProperties":451034,"capacityMb":5120,"usagePercent":5,"actualDbMb":null,"estimatedDbMb":273,"warning":null}` ✓
+  - PRAGMA は SQLITE_AUTH で null になるが行数推定フォールバックが機能
+  - 物件数 451,034件 / 5GB 中 5% (推定 273MB)
+
+### 次のタスク
+- 翌朝 03:00 の Task Scheduler 実行ログを確認
+- ADMIN_SECRET をローカル `.env` (gitignore 済) と Task Scheduler 環境変数に追記すれば auto-import の health check も Bearer 経由に切替可能
+
