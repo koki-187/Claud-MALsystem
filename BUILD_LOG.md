@@ -521,3 +521,55 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
   - `GET /api/stats` → 200 + 742,412件 ✅
   - `GET /api/health` → 200 ✅
 - **次のタスク**: 残り4サイト調査 (suumo cookie, fudosan DNS, reins MLS会員制, smaity SPA)
+
+---
+
+## 2026-04-21 (Desktop) — TERASS新ドメイン抽出 + 217件マスター追加 + Driveアーカイブ
+- **環境**: Desktop (Claude Code)
+- **ブランチ**: master
+- **コミット**: `58a81c0` (URL更新) + 本セッション追加分
+- **目的**: TERASS picks-agent.terass.com (新ドメイン) からCSV再抽出、差分のみ精密インジェスト
+
+### 抽出成果
+- Chrome CDP プロファイル `Chrome_CDP` で picks-agent.terass.com にログイン
+- `node scripts/extract-terass.mjs` で IndexedDB 抽出 → 9 CSV (1,179,642 行)
+- 重複ファイル `MAL_ALL_mansion_成約済 (1).csv` (MD5 一致) 削除 → 8 CSV
+
+### Drive アーカイブ
+- 8 CSV を gzip -9 圧縮 (255MB → 52MB)
+- `terass-exports/2026-04-21/` 配下に配置 → Drive デスクトップ自動同期
+- `.gitignore` に `terass-exports/` 追加 (リポジトリ汚染防止)
+- Drive folder ID: `15zOJW4Pi6HDL4jJr7cxvpLHQQaRK5NSK`
+
+### 精密差分インジェスト (D1 容量配慮)
+- 在庫CSV から 356,217 unique fingerprint 抽出
+- D1 staging テーブル `fp_staging` に bulk-load (wrangler d1 execute --file)
+- LEFT JOIN by fingerprint → **真の新規は 217 件のみ** (既存 99.94% カバー)
+- staging 即削除で D1 サイズを 495MB → 479MB に回復
+- 217 件分のフルデータ抽出 (Python) → properties 217 + master_properties 217 INSERT
+- detail_url NULL→'' 修正で NOT NULL 制約クリア
+
+### バグ修正
+- `terass_convert_and_import.mjs`: API_URL の Workerドメイン誤り (`mal-property-system` → `mal-search-system`) ※今後修正必要
+- `extract-terass.mjs`: 新旧ドメイン両対応 (`TERASS_URL_PATTERNS` 配列化)
+
+### DB状態 (作業後)
+- properties: 450,224 → **450,977** (+217 active 新規 + 入庫増分)
+- master_properties: 356,607 → **356,824** (+217)
+- D1 サイズ: 478.5MB → **479.5MB** (上限500MBまで余裕20.5MB)
+- TERASS 在庫被覆率: **99.94%** (CSV 356,217 中 356,000 既存)
+
+### アーキテクチャ確立
+**ハイブリッド構成**:
+1. **D1 (500MB)**: master_properties + 在庫 properties (検索/表示用)
+2. **R2 (10GB)**: sold物件 JSONL (cold archive、Worker参照可)
+3. **Google Drive 3TB**: 生CSV/PDF/画像 (永続バックアップ、rclone同期予定)
+
+### デプロイ
+- 不要 (D1 直接操作のみ、コード変更なし)
+
+### 次のタスク
+1. wrangler Task Scheduler で日次自動抽出 (Chrome CDP起動 → `auto-import-terass.sh`)
+2. 成約済CSVをR2に追加投入 (容量考慮: ~250MB必要、要D1 paid移行検討)
+3. `terass_convert_and_import.mjs` の API_URL/Auth バグ修正
+

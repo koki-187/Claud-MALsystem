@@ -9,3 +9,7 @@ dist/
 desktop.ini
 .claude/scheduled_tasks.lock
 .claude/*.lock
+
+# Drive-synced data archive (do not commit)
+terass-exports/
+
