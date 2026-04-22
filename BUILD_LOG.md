@@ -5,6 +5,34 @@
 
 ---
 
+## 2026-04-23 (Desktop) — /100test 高インパクト 5項目実装
+
+- **環境**: Desktop
+- **ブランチ**: master
+- **変更内容**: 5名プロフェッショナルレビュー (平均 66/100) の高インパクト改善を全実施:
+  1. **`/api/admin/stats`** に `getD1SizeMb` (PRAGMA) と `getR2SizeMb` (R2 list + KV 1h cache,
+     最大 100k オブジェクト走査) を追加。`r2StorageEstimatedMb` / `dbSizeEstimatedMb` の
+     ハードコード 0 を実値計算に置換。観測性のウソを撲滅。
+  2. **README** を v5.0 → v6.2 に全面更新。9 サイト / TERASS PICKS フロー / 管理 API /
+     リソース ID / セットアップ手順を反映。
+  3. **検索オートコンプリート** 強化: debounce 300ms → 200ms (体感反応性向上)。
+     既存の `/api/suggest` + `<datalist>` 連携を保持。
+  4. **可読性向上**: `.field-label` `.sites-label` を 11px → 13px、
+     `text-transform: uppercase` 撤去、`color: text3 → text2` でコントラスト強化。
+     `prefers-color-scheme` 追従を追加 (ユーザー明示切替を優先)。
+  5. **専門用語ツールチップ + ウェルカムガイド**:
+     - 「利回り」項目に `?` ヘルプアイコン (CSS `data-tip` 方式、JS 不要)
+     - 「成約事例」「マイソク印刷」ボタンに `title` 属性追加
+     - 初回訪問時に 3 ステップのウェルカムモーダル (localStorage 1回限定)
+     - ヘッダーに `?` ボタン追加で再表示可能
+     - `/` キーで検索フォーカス、`Esc` でモーダル閉じのキーボードショートカット
+- **デプロイ**: 未 (要 Desktop で `npx wrangler deploy`)
+- **型チェック**: ✅ tsc --noEmit PASS
+- **同期**: `C:/Users/reale/Downloads/mal-worker/` に反映済
+- **次のタスク**: `npx wrangler deploy` 実行 → /api/admin/stats で R2 実値返却を確認
+
+---
+
 ## 2026-04-23 (Desktop) — TERASS fail-fast ログイン検出 & 0件 exit 2 化
 
 - **環境**: Desktop

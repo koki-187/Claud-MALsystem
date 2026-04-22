@@ -967,9 +967,240 @@ img { max-width: 100%; }
   a[class="modal-cta"] { display: none !important; }
   body { background: #fff !important; color: #000 !important; }
 }
+
+/* ==========================================
+   v6.2 — UX 改善 (可読性 / ツールチップ / ウェルカム)
+   ========================================== */
+
+/* ── 可読性: ラベル類の底上げ (11px → 12-13px), uppercase 撤去 ── */
+.field-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--c-text2);     /* 11px時より濃い色でコントラスト確保 */
+  letter-spacing: 0;          /* uppercase 風の字間を撤去 */
+  text-transform: none;       /* 日本語UIの可読性優先 */
+  margin-bottom: 6px;
+}
+.sites-label {
+  font-size: 13px;
+  color: var(--c-text2);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.sort-label,
+.results-time,
+.logo-sub,
+.range-sep {
+  font-size: 12px;
+}
+.results-time { color: var(--c-text2); }
+.chip-label { font-size: 13px; }
+.sites-toggle-btn { font-size: 12px; }
+
+/* prefers-color-scheme で OS 設定に追従 (ユーザーが明示切替済なら data-theme 優先) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    --c-bg: #0f172a;
+    --c-bg2: #1e293b;
+    --c-surface: #1e293b;
+    --c-border: #334155;
+    --c-border2: #475569;
+    --c-text: #f1f5f9;
+    --c-text2: #cbd5e1;
+    --c-text3: #94a3b8;
+    --c-text4: #64748b;
+  }
+}
+
+/* ── ツールチップ (専門用語の説明) ── */
+.term-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: var(--c-bg2);
+  color: var(--c-text3);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: help;
+  margin-left: 4px;
+  border: 1px solid var(--c-border);
+  position: relative;
+  vertical-align: middle;
+}
+.term-help:hover, .term-help:focus {
+  background: var(--c-primary);
+  color: #fff;
+  border-color: var(--c-primary);
+}
+.term-help[data-tip]:hover::after,
+.term-help[data-tip]:focus::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 12px;
+  background: var(--c-text);
+  color: var(--c-bg);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  width: max-content;
+  max-width: 280px;
+  z-index: 1000;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+.term-help[data-tip]:hover::before,
+.term-help[data-tip]:focus::before {
+  content: '';
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: var(--c-text);
+  z-index: 1000;
+  pointer-events: none;
+}
+
+/* ── ウェルカムガイド モーダル ── */
+.welcome-overlay {
+  position: fixed; inset: 0;
+  background: rgba(15, 23, 42, .55);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.welcome-overlay.active { display: flex; }
+.welcome-card {
+  background: var(--c-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  max-width: 540px;
+  width: 100%;
+  padding: 28px 28px 22px;
+  position: relative;
+  animation: welcomeIn .25s ease-out;
+}
+@keyframes welcomeIn {
+  from { opacity: 0; transform: translateY(12px) scale(.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.welcome-title {
+  font-size: 22px;
+  font-weight: 900;
+  margin-bottom: 6px;
+  background: linear-gradient(135deg, var(--c-primary), var(--c-accent));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.welcome-sub {
+  font-size: 13px;
+  color: var(--c-text3);
+  margin-bottom: 18px;
+}
+.welcome-step {
+  display: flex;
+  gap: 14px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+  background: var(--c-bg2);
+  border-radius: var(--radius-sm);
+  align-items: flex-start;
+}
+.welcome-step-num {
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  background: var(--c-primary);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 13px;
+}
+.welcome-step-body { flex: 1; }
+.welcome-step-title { font-size: 14px; font-weight: 700; margin-bottom: 2px; }
+.welcome-step-desc { font-size: 12px; color: var(--c-text2); line-height: 1.55; }
+.welcome-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 18px;
+  align-items: center;
+}
+.welcome-actions .actions-spacer { flex: 1; }
+.welcome-skip {
+  font-size: 12px;
+  color: var(--c-text3);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.welcome-skip input { width: 14px; height: 14px; cursor: pointer; }
+.welcome-cta {
+  padding: 10px 22px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--c-primary), var(--c-accent));
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  border: none;
+}
   </style>
 </head>
 <body class="page-wrap">
+
+<!-- =================== WELCOME GUIDE (初回訪問時のみ表示) =================== -->
+<div class="welcome-overlay" id="welcomeOverlay" role="dialog" aria-modal="true" aria-labelledby="welcomeTitle">
+  <div class="welcome-card">
+    <div class="welcome-title" id="welcomeTitle">🌎 MAL へようこそ</div>
+    <div class="welcome-sub">47都道府県・9サイト横断の不動産検索ツールです。3 ステップで使い始められます。</div>
+
+    <div class="welcome-step">
+      <div class="welcome-step-num">1</div>
+      <div class="welcome-step-body">
+        <div class="welcome-step-title">価格 と 都道府県 だけ入れて検索</div>
+        <div class="welcome-step-desc">最低限この 2 つでOK。他は空のままで大丈夫です。検索バーの「<kbd>/</kbd>」キーでフォーカスできます。</div>
+      </div>
+    </div>
+
+    <div class="welcome-step">
+      <div class="welcome-step-num">2</div>
+      <div class="welcome-step-body">
+        <div class="welcome-step-title">サイトを絞り込むと速い</div>
+        <div class="welcome-step-desc">9サイト全部チェックすると重くなることがあります。3〜5 サイトに絞ると体感が速くなります。</div>
+      </div>
+    </div>
+
+    <div class="welcome-step">
+      <div class="welcome-step-num">3</div>
+      <div class="welcome-step-body">
+        <div class="welcome-step-title">専門用語は <span class="term-help" data-tip="このアイコン">?</span> マークでヘルプ</div>
+        <div class="welcome-step-desc">「利回り」「成約事例」「マイソク」など、項目横の <strong>?</strong> をクリック/フォーカスすると意味が出ます。</div>
+      </div>
+    </div>
+
+    <div class="welcome-actions">
+      <label class="welcome-skip">
+        <input type="checkbox" id="welcomeDontShow" checked>
+        次回から表示しない
+      </label>
+      <div class="actions-spacer"></div>
+      <button class="welcome-cta" onclick="closeWelcome(document.getElementById('welcomeDontShow').checked)">はじめる</button>
+    </div>
+  </div>
+</div>
 
 <!-- =================== HEADER =================== -->
 <header class="header">
@@ -978,7 +1209,7 @@ img { max-width: 100%; }
       <span class="logo-icon">🌎</span>
       <div>
         <div class="logo-text">MAL</div>
-        <div class="logo-sub">不動産一括検索 v6.0</div>
+        <div class="logo-sub">不動産一括検索 v6.2</div>
       </div>
     </div>
     <div class="header-spacer"></div>
@@ -986,7 +1217,10 @@ img { max-width: 100%; }
       <i class="fas fa-database" style="color:var(--c-primary)"></i>
       <span id="totalCount">--</span>件
     </div>
-    <button class="header-btn" onclick="toggleTheme()" title="テーマ切替" id="themeBtn">
+    <button class="header-btn" onclick="showWelcomeManually()" title="使い方ガイドを表示" aria-label="使い方ガイド">
+      <i class="fas fa-question"></i>
+    </button>
+    <button class="header-btn" onclick="toggleTheme()" title="テーマ切替 (ダーク/ライト)" id="themeBtn" aria-label="テーマ切替">
       <i class="fas fa-moon" id="themeIcon"></i>
     </button>
     <button class="btn-primary" onclick="showStatsModal()">
@@ -1062,7 +1296,7 @@ img { max-width: 100%; }
         </div>
       </div>
       <div>
-        <div class="field-label">利回り下限（投資）</div>
+        <div class="field-label">利回り下限（投資）<span class="term-help" tabindex="0" data-tip="利回り = (年間家賃収入 ÷ 物件価格) × 100。投資物件の収益性指標。例: 1億の物件で年700万円家賃 → 7.0%。">?</span></div>
         <div class="range-row">
           <input type="number" id="yieldMin" placeholder="例: 7.5" class="field-input" min="0" step="0.1">
           <span class="range-sep">%以上</span>
@@ -1170,7 +1404,7 @@ img { max-width: 100%; }
   <!-- Tab Bar -->
   <div class="tab-bar">
     <button class="tab-btn active" id="tabProperties" onclick="switchTab('properties')">🏠 物件一覧</button>
-    <button class="tab-btn" id="tabTransactions" onclick="switchTab('transactions')">📋 成約事例</button>
+    <button class="tab-btn" id="tabTransactions" onclick="switchTab('transactions')" title="成約事例 = 過去に売買が成立した物件の取引価格データ。相場感の参考に使えます。">📋 成約事例</button>
   </div>
 
   <!-- Results Bar -->
@@ -1338,7 +1572,45 @@ function toggleTheme() {
 
   // Stats bar
   loadHeaderStats();
+
+  // Welcome ガイド (初回訪問時のみ)
+  showWelcomeIfFirstVisit();
+
+  // キーボードショートカット: / で検索フォーカス、Esc でモーダル閉じ
+  document.addEventListener('keydown', function(e) {
+    var tag = (e.target && e.target.tagName) || '';
+    var inForm = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    if (e.key === '/' && !inForm) {
+      e.preventDefault();
+      var sq = document.getElementById('searchQuery');
+      if (sq) sq.focus();
+    }
+    if (e.key === 'Escape') {
+      var w = document.getElementById('welcomeOverlay');
+      if (w && w.classList.contains('active')) closeWelcome(false);
+    }
+  });
 })();
+
+// ── Welcome ガイド ──
+function showWelcomeIfFirstVisit() {
+  try {
+    if (localStorage.getItem('mal_welcome_seen_v1') === '1') return;
+  } catch (e) { /* ignore */ }
+  var ov = document.getElementById('welcomeOverlay');
+  if (ov) ov.classList.add('active');
+}
+function closeWelcome(remember) {
+  var ov = document.getElementById('welcomeOverlay');
+  if (ov) ov.classList.remove('active');
+  if (remember) {
+    try { localStorage.setItem('mal_welcome_seen_v1', '1'); } catch (e) { /* ignore */ }
+  }
+}
+function showWelcomeManually() {
+  var ov = document.getElementById('welcomeOverlay');
+  if (ov) ov.classList.add('active');
+}
 
 function toggleAllSites(checked) {
   document.querySelectorAll('.site-cb').forEach(function(cb) {
@@ -1639,7 +1911,7 @@ function renderModal(p) {
     + buildSourcesSection(p)
     + '<div style="display:flex;gap:10px;margin-top:4px">'
     + (p.detailUrl ? '<a href="' + escAttr(p.detailUrl) + '" target="_blank" rel="noopener noreferrer" class="modal-cta" style="flex:1"><i class="fas fa-external-link-alt mr-2"></i>' + escHtml(site.name || 'サイト') + 'で詳細を見る</a>' : '')
-    + '<button onclick="window.print()" class="btn-ghost" style="flex-shrink:0;padding:14px 20px;font-size:15px;font-weight:800;border-radius:10px" title="マイソク印刷"><i class="fas fa-print"></i> 印刷</button>'
+    + '<button onclick="window.print()" class="btn-ghost" style="flex-shrink:0;padding:14px 20px;font-size:15px;font-weight:800;border-radius:10px" title="マイソク (= 物件概要書) を印刷。価格・間取り・写真を1枚にまとめた業者向け資料。"><i class="fas fa-print"></i> マイソク印刷</button>'
     + '</div>';
 }
 
@@ -1775,7 +2047,7 @@ function onSearchInput() {
         var dl = document.getElementById('citySuggestions');
         dl.innerHTML = (d.suggestions||[]).map(function(s){ return '<option value="' + escAttr(s) + '">'; }).join('');
       }).catch(function(){});
-  }, 300);
+  }, 200);  // v6.2: 300ms → 200ms (体感反応性向上)
 }
 
 // ── Header Stats ──

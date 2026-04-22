@@ -20,6 +20,58 @@ async function safeAll<T>(stmt: D1PreparedStatement): Promise<{ results: T[] }> 
   } catch { return { results: [] }; }
 }
 
+/** D1 実サイズ (MB) — PRAGMA page_count × page_size。失敗時は 0。 */
+async function getD1SizeMb(db: D1Database): Promise<number> {
+  try {
+    const pc = await db.prepare('PRAGMA page_count').first<{ page_count: number }>();
+    const ps = await db.prepare('PRAGMA page_size').first<{ page_size: number }>();
+    if (pc && ps) return Math.round((pc.page_count * ps.page_size) / 1024 / 1024);
+  } catch { /* ignore */ }
+  return 0;
+}
+
+/** R2 全オブジェクトサイズ合計 (MB)。KV キャッシュ 1h で list コストを抑制。
+ *  最大 100,000 オブジェクト (= 100 list calls) で打ち切り、それ以降は推定値に切替。*/
+async function getR2SizeMb(env: Bindings): Promise<{ mb: number; objectCount: number; truncated: boolean; cached: boolean }> {
+  const CACHE_KEY = 'admin:r2-size-v1';
+  const TTL_SEC = 3600;
+  try {
+    const cached = await env.MAL_CACHE.get(CACHE_KEY, { type: 'json' }) as
+      | { mb: number; objectCount: number; truncated: boolean; ts: number }
+      | null;
+    if (cached && Date.now() - cached.ts < TTL_SEC * 1000) {
+      return { mb: cached.mb, objectCount: cached.objectCount, truncated: cached.truncated, cached: true };
+    }
+  } catch { /* fallthrough */ }
+
+  let totalBytes = 0;
+  let count = 0;
+  let cursor: string | undefined = undefined;
+  let truncated = false;
+  const MAX_LIST_CALLS = 100;
+  for (let i = 0; i < MAX_LIST_CALLS; i++) {
+    const r: R2Objects = await env.MAL_STORAGE.list({ limit: 1000, cursor });
+    for (const obj of r.objects) {
+      totalBytes += obj.size;
+      count++;
+    }
+    if (!r.truncated) { cursor = undefined; break; }
+    cursor = (r as R2Objects & { cursor?: string }).cursor;
+    if (!cursor) break;
+    if (i === MAX_LIST_CALLS - 1) truncated = true;
+  }
+  const mb = Math.round(totalBytes / 1024 / 1024);
+  // best-effort cache write (failures don't break stats)
+  try {
+    await env.MAL_CACHE.put(
+      CACHE_KEY,
+      JSON.stringify({ mb, objectCount: count, truncated, ts: Date.now() }),
+      { expirationTtl: TTL_SEC },
+    );
+  } catch { /* ignore */ }
+  return { mb, objectCount: count, truncated, cached: false };
+}
+
 // ─── GET /api/admin/stats ─────────────────────────────────────────────────────
 admin.get('/stats', async (c) => {
   const db = c.env.MAL_DB;
@@ -28,6 +80,7 @@ admin.get('/stats', async (c) => {
     activeRow, soldRow, delistedRow, totalRow, dupRow,
     totalImgRow, dlImgRow, pendingDlRow, mysokuRow, txnRow,
     siteRows, prefRows, lastScrapeRow, lastCsvRow,
+    dbSizeMb, r2Size,
   ] = await Promise.all([
     safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active'`)),
     safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='sold'`)),
@@ -43,6 +96,8 @@ admin.get('/stats', async (c) => {
     safeAll<{ prefecture: PrefectureCode; cnt: number }>(db.prepare(`SELECT prefecture, COUNT(*) as cnt FROM properties WHERE status='active' GROUP BY prefecture ORDER BY cnt DESC LIMIT 20`)),
     safeFirst<{ val: string | null }>(db.prepare(`SELECT MAX(completed_at) as val FROM scrape_jobs WHERE status='completed'`)),
     safeFirst<{ val: string | null }>(db.prepare(`SELECT MAX(completed_at) as val FROM csv_imports WHERE status='completed'`)),
+    getD1SizeMb(db),
+    getR2SizeMb(c.env),
   ]);
 
   const stats: AdminStats = {
@@ -56,8 +111,8 @@ admin.get('/stats', async (c) => {
     pendingDownloads:    pendingDlRow?.cnt ?? 0,
     totalMysoku:         mysokuRow?.cnt ?? 0,
     totalTransactions:   txnRow?.cnt ?? 0,
-    r2StorageEstimatedMb: 0,
-    dbSizeEstimatedMb:    0,
+    r2StorageEstimatedMb: r2Size.mb,
+    dbSizeEstimatedMb:    dbSizeMb,
     siteBreakdown: (siteRows.results ?? []).map(r => ({
       siteId: r.site_id,
       count:  r.cnt,
