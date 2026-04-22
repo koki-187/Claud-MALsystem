@@ -141,6 +141,34 @@ async function main() {
     }
     log(`ページ取得成功: ${terassPage.url()}`);
 
+    // 6a. ログイン状態チェック (fail-fast): URL がログイン/認証ページにリダイレクトされていたら
+    //     IndexedDB は空なので即エラー終了させる。silent failure (0件ダウンロード) を防ぐ。
+    const currentUrl = terassPage.url();
+    const loginIndicators = ['/login', '/signin', '/sign-in', '/auth', '/oauth', 'accounts.google.com'];
+    if (loginIndicators.some(ind => currentUrl.includes(ind))) {
+      throw new Error(
+        `TERASS PICKS のログインセッションが切れています (現在URL: ${currentUrl})\n` +
+        `手動で Chrome (--user-data-dir=%APPDATA%\\Chrome_CDP) を起動し、\n` +
+        `https://picks-agent.terass.com/search/mansion にログインしてから再実行してください。`
+      );
+    }
+
+    // 6b. ログイン後でも IndexedDB が空の可能性をチェック (TERASS UI が描画される前)
+    //     軽量プローブ: window.indexedDB.databases() を呼んで terass 関連 DB が存在するか確認
+    try {
+      const hasTerassDb = await terassPage.evaluate(async () => {
+        if (!('databases' in indexedDB)) return null; // 古い Chrome では未対応 → スキップ
+        const dbs = await indexedDB.databases();
+        return dbs.some(d => d.name && /terass|picks/i.test(d.name));
+      });
+      if (hasTerassDb === false) {
+        warn('IndexedDB に TERASS 関連 DB が見つかりません。ログイン直後で初期化前か、未ログインの可能性あり。');
+        warn('検索ページを操作してデータがロードされていることを確認してください。');
+      }
+    } catch (probeErr) {
+      warn(`IndexedDB プローブ失敗 (致命的でないので継続): ${probeErr.message}`);
+    }
+
     // 6. ダウンロード先を設定
     const downloadContext = terassPage.context();
     await downloadContext.setDefaultTimeout(DOWNLOAD_TIMEOUT_MS);
@@ -210,11 +238,16 @@ async function main() {
     log(`ダウンロードされたファイル数: ${downloadedFiles.length}`);
     downloadedFiles.forEach(f => log(`  - ${f.filename}`));
 
+    // 0件ダウンロードは異常 (ログイン切れ / IndexedDB 空 / TERASS UI 仕様変更 等)
+    // success:false で返して cron ログ・呼び出し元に明確に伝える
     result = {
-      success: true,
+      success: downloadedFiles.length > 0,
       downloadedFiles,
       evalResult,
     };
+    if (downloadedFiles.length === 0) {
+      error('ダウンロードが0件でした。ログイン状態・IndexedDB の状態を確認してください。');
+    }
 
   } finally {
     // CDP attach の場合は disconnect のみ — ブラウザプロセスは終了させない
@@ -270,7 +303,13 @@ function runConvertAndImport() {
 }
 
 // ===== エントリーポイント =====
-main().catch(err => {
+main().then(result => {
+  // 0件ダウンロード = 失敗扱いで exit 2 (cron ログで検知可能に)
+  if (result && result.success === false) {
+    error('処理は完走しましたが結果が success:false です (0件ダウンロード)。exit 2 で終了。');
+    process.exit(2);
+  }
+}).catch(err => {
   error(err.message);
   process.exit(1);
 });

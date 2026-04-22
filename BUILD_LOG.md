@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-04-23 (Desktop) — TERASS fail-fast ログイン検出 & 0件 exit 2 化
+
+- **環境**: Desktop
+- **ブランチ**: master
+- **変更内容**: `scripts/extract-terass.mjs` に3つのフェイルセーフを追加:
+  1. アタッチ後の URL をチェックし `/login` `/signin` `/auth` `/oauth` 等を含む場合は即エラー
+     (ログイン切れのまま silent に 0 件ダウンロードする事故を防止)
+  2. `indexedDB.databases()` で TERASS 関連 DB の有無をプローブし、警告ログ出力
+  3. 0 件ダウンロード時は `success:false` で返し、呼び出し元は `exit 2` で終了
+     (Task Scheduler / cron ログで明確に検知可能)
+- **デプロイ**: 不要 (Node スクリプトのみ)
+- **同期**: `C:/Users/reale/Downloads/mal-worker/scripts/extract-terass.mjs` にも反映済
+
+---
+
 ## 2026-04-23 (Desktop) — TERASS ログイン永続化修正
 
 - **環境**: Desktop (Windows PowerShell / Task Scheduler)
