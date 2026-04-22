@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # TERASS-PICKS Auto Import (PowerShell wrapper for Task Scheduler)
 # =============================================================================
 # 役割:
@@ -54,7 +54,8 @@ function Write-Log {
 
 function Test-CdpReady {
     try {
-        $resp = Invoke-WebRequest -Uri "http://localhost:$CdpPort/json/version" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
+        # IPv4 固定: localhost だと IPv6 (::1) を試して Chrome の IPv4 リスナーに届かずタイムアウトする
+        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$CdpPort/json/version" -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop
         return $resp.StatusCode -eq 200
     } catch {
         return $false

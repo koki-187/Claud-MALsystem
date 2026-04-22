@@ -742,3 +742,42 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
 - 翌朝 03:00 の Task Scheduler 実行ログを確認
 - ADMIN_SECRET をローカル `.env` (gitignore 済) と Task Scheduler 環境変数に追記すれば auto-import の health check も Bearer 経由に切替可能
 
+## 2026-04-23 02:40 (Desktop)
+- **環境**: Desktop (Windows / Git Bash)
+- **ブランチ**: master
+- **変更内容**: Task Scheduler 手動検証で発見した PS1 不具合を 2 件修正 + mal-worker ローカルコピー復旧
+- **デプロイ**: 不要 (CFリソース変更なし)
+
+### 発見した不具合 (03:00 cron 前に検出できて幸運)
+1. **`C:/Users/reale/Downloads/mal-worker/` ディレクトリ消失**
+   - Task Scheduler の参照先がなくなり 03:00 cron 失敗確実だった
+   - 復旧: Google Drive リポジトリから `cp -r` + `npm install` (88 packages, playwright 含む)
+2. **`run-auto-import.ps1` 構文エラー** (PowerShell 5.1 + UTF-8 BOM なし)
+   - PS 5.1 は BOM 無 UTF-8 を cp932 として読み込み、Japanese コメントで `TerminatorExpectedAtEndOfString`
+   - 修正: `[System.Text.UTF8Encoding]::new($true)` で BOM 付き UTF-8 に再書き込み
+3. **`Test-CdpReady` IPv6 タイムアウト**
+   - `Invoke-WebRequest http://localhost:9222` が `::1` を試して Chrome の IPv4 リスナーに届かず 2s タイムアウト × 16回 → CDP 起動済でも常に「未起動」判定
+   - 修正: URL を `http://127.0.0.1:9222` に固定 (curl は IPv4 fallback するため気付きにくかった)
+
+### 検証 (3 回目の手動実行で end-to-end 成功)
+```
+[2026-04-23 02:35:36] Chrome CDP は既に :9222 で起動中。既存セッションを利用します。  ✓ IPv4 fix
+[2026-04-23 02:35:36] auto-import-terass.sh を実行中...                                ✓ PS1 構文 OK
+[2026-04-23 02:35:46] auto-import-terass.sh 終了コード: 0                              ✓ 完走
+```
+
+### 残課題: TERASS PICKS への手動ログイン
+- 抽出結果: `{"ok":false,"reason":"no_indexeddb"}` — Chrome_CDP プロファイルが未ログイン
+- フォールバック (ダウンロード待機) も `0 件` で失敗
+- 対処: Chrome_CDP プロファイルで一度だけ手動ログインすればクッキーが永続化されて以後完全自動化
+- 手順:
+  1. `C:/Users/reale/Downloads/mal-worker/scripts/Chrome_CDP.bat` を実行
+  2. https://picks-agent.terass.com/search/mansion を開く
+  3. ログイン → 任意の検索を実行 (IndexedDB に物件データが入る)
+  4. Chrome を閉じる (CDP プロファイルにセッション保存)
+  5. 翌朝 03:00 の cron で自動抽出される
+
+### 次のタスク
+- ユーザーが TERASS PICKS にログイン (上記手順)
+- 03:00 cron 後の `terass_cron.log` 末尾を確認
+
