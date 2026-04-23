@@ -310,26 +310,49 @@ async function selectPrefecture(page, prefectureName) {
   }
 
   // 指定都道府県を選択
-  try {
-    // label:has-text でも input 内包 label でも機能する
-    const prefLabel = dialog.locator(`label:has-text("${prefectureName}")`).first();
-    if (await prefLabel.count() > 0) {
-      await prefLabel.click({ timeout: 3000 });
-      log(`  ${prefectureName} を選択`);
-    } else {
-      // fallback: テキストで直接検索
-      const prefText = dialog.locator(`text="${prefectureName}"`).first();
-      if (await prefText.count() > 0) {
-        await prefText.click({ timeout: 3000 });
-        log(`  ${prefectureName} を選択 (text locator)`);
-      } else {
-        warn(`  ${prefectureName} のチェックボックスが見つかりません — フィルタなしで続行`);
-        await page.keyboard.press('Escape').catch(() => {});
-        return;
+  // Modal は virtual scroll / 条件 render のため label が DOM に出ない場合あり。
+  // → 最大 6 回まで modal 内を上下スクロールしながら探索し、最終手段は JS eval で直接クリック。
+  let clicked = false;
+  for (let attempt = 0; attempt < 6 && !clicked; attempt++) {
+    try {
+      const prefLabel = dialog.locator(`label:has-text("${prefectureName}")`).first();
+      if (await prefLabel.count() > 0) {
+        await prefLabel.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+        await prefLabel.click({ timeout: 3000, force: true });
+        log(`  ${prefectureName} を選択${attempt > 0 ? ` (attempt ${attempt + 1})` : ''}`);
+        clicked = true;
+        break;
       }
-    }
-  } catch (e) {
-    warn(`  ${prefectureName} 選択失敗 (続行): ${e.message}`);
+    } catch { /* retry */ }
+    // スクロールして再試行 (方向を交互に: 先に上に戻して全域をスキャン、その後下へ)
+    await page.evaluate((dir) => {
+      const m = document.querySelector('div.MuiModal-root.css-8ndowl');
+      if (!m) return;
+      // modal 内の全スクロール可能要素を対象
+      const scrolls = [m, ...m.querySelectorAll('*')].filter(el => el.scrollHeight > el.clientHeight + 5);
+      for (const el of scrolls) el.scrollBy(0, dir);
+      // window も fallback
+      window.scrollBy(0, dir);
+    }, attempt < 3 ? -400 : 400);
+    await page.waitForTimeout(400);
+  }
+  // 最終手段: page.evaluate で modal 内の label 全走査 → 一致クリック
+  if (!clicked) {
+    clicked = await page.evaluate((name) => {
+      const m = document.querySelector('div.MuiModal-root.css-8ndowl');
+      if (!m) return false;
+      const label = Array.from(m.querySelectorAll('label')).find(l => (l.innerText || '').trim() === name);
+      if (!label) return false;
+      label.scrollIntoView({ block: 'center' });
+      const cb = label.querySelector('input[type="checkbox"]');
+      if (cb && !cb.checked) cb.click();
+      else label.click();
+      return true;
+    }, prefectureName);
+    if (clicked) log(`  ${prefectureName} を選択 (JS eval fallback)`);
+  }
+  if (!clicked) {
+    warn(`  ${prefectureName} のチェックボックスが見つかりません — フィルタなしで続行`);
     await page.keyboard.press('Escape').catch(() => {});
     return;
   }
@@ -361,7 +384,17 @@ async function selectPrefecture(page, prefectureName) {
 // ===== カテゴリ切替 (URL ナビゲーション + 在庫/成約済タブ click + 都道府県絞り込み) =====
 async function switchCategory(page, kind, status, prefectureName) {
   // 1. URL でカテゴリ切替
-  const url = `https://${TERASS_HOST}/search/${kind}`;
+  // TERASS モーダルは coverage 外の 17 県 (北海道, 東北, 北陸, 沖縄 等) を render しないため、
+  // `?params=<base64>` に prefectureCodes を直接埋めて URL 段階で絞り込む方が確実。
+  let url = `https://${TERASS_HOST}/search/${kind}`;
+  if (prefectureName) {
+    const pref = PREFECTURES.find(p => p.name === prefectureName);
+    if (pref) {
+      const payload = { json: { prefectureCodes: [parseInt(pref.code, 10)] } };
+      const b64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
+      url += `?params=${encodeURIComponent(b64)}&limit=50`;
+    }
+  }
   log(`  ナビゲート: ${url}`);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
   await page.waitForTimeout(CATEGORY_WAIT_MS);
@@ -382,8 +415,12 @@ async function switchCategory(page, kind, status, prefectureName) {
     warn(`  ステータス切替失敗 (続行): ${e.message}`);
   }
 
-  // 3. 都道府県絞り込み (prefectureName が指定されている場合)
+  // 3. 都道府県絞り込み
+  // URL params で prefectureCodes を指定済のため、モーダル操作はスキップ (coverage 外県でも確実に動作)。
   if (prefectureName) {
+    log(`  都道府県フィルタは URL params で指定済 (modal skip)`);
+  }
+  if (false && prefectureName) {
     await selectPrefecture(page, prefectureName);
   }
 
@@ -420,10 +457,23 @@ async function exportCurrent(page, ctx, dst) {
   // ダウンロードイベントを先にリッスン (page スコープ — ctx では発火しない)
   const downloadPromise = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT_MS });
 
+  // 0件検知: ページ上の「0件」「0 件」「該当するデータはありません」「no data」を先にチェック
+  const zeroRows = await page.evaluate(() => {
+    const t = document.body.innerText || '';
+    return /0\s*件|該当するデータ|no data|No rows|データがありません/i.test(t) && !/[1-9]\d*\s*件/.test(t);
+  });
+  if (zeroRows) {
+    throw new Error('NO_DATA: 0件のためエクスポート対象なし');
+  }
+
   // 「出力」ボタンクリック (メニューが開く)
   const outputBtn = page.locator('button[aria-label="Export"], button:has-text("出力")').first();
   if (await outputBtn.count() === 0) {
     throw new Error('「出力」ボタンが見つかりません');
+  }
+  // disabled なら NO_DATA (出力不能状態)
+  if (await outputBtn.isDisabled().catch(() => false)) {
+    throw new Error('NO_DATA: 出力ボタンが disabled');
   }
   await outputBtn.click({ timeout: 5000 });
   log('  「出力」メニューを開く');
@@ -519,8 +569,13 @@ async function main() {
         await exportCurrent(page, ctx, dst);
         downloadedFiles.push({ filename: fname, path: dst, prefecture: pref, ...cat });
       } catch (e) {
-        error(`  ${pref.name} / ${cat.label} 失敗: ${e.message}`);
-        errors.push({ prefecture: pref.name, category: cat.label, error: e.message });
+        if (/NO_DATA/.test(e.message)) {
+          log(`  ${pref.name} / ${cat.label} スキップ (TERASS 在庫なし)`);
+          errors.push({ prefecture: pref.name, category: cat.label, error: 'NO_DATA', skipped: true });
+        } else {
+          error(`  ${pref.name} / ${cat.label} 失敗: ${e.message}`);
+          errors.push({ prefecture: pref.name, category: cat.label, error: e.message });
+        }
       }
     }
   }

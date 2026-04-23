@@ -338,8 +338,8 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
   const scheduledDate = new Date(event.scheduledTime);
   const hour = scheduledDate.getUTCHours();
 
-  // ── Daily cleanup: UTC 18:00 (JST 03:00) ───────────────────────────────────
-  if (hour === 18) {
+  // ── Daily cleanup: UTC 15:00 (JST 00:00) — 既存 cron に統合 (free tier 5 cron 上限) ─
+  if (hour === 15) {
     ctx.waitUntil((async () => {
       try {
         // 1. Purge stale metadata rows (logs, queue, imports)

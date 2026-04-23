@@ -31,4 +31,4 @@ RATE_LIMIT_PER_MINUTE = "60"
 WORKER_URL = "https://mal-search-system.navigator-187.workers.dev"
 
 [triggers]
-crons = ["0 3 * * *", "0 9 * * *", "0 15 * * *", "0 18 * * *", "0 21 * * *", "*/15 * * * *"]
+crons = ["0 3 * * *", "0 9 * * *", "0 15 * * *", "0 21 * * *", "*/15 * * * *"]
