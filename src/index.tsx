@@ -1396,6 +1396,9 @@ img { max-width: 100%; }
     <button onclick="window.location.href='/api/admin/stats'" class="btn-admin">
       📊 DB統計
     </button>
+    <button onclick="showImportHistoryModal()" class="btn-admin">
+      📋 取込履歴
+    </button>
   </div>
 
   <!-- Active Filters -->
@@ -1491,6 +1494,30 @@ img { max-width: 100%; }
     <div id="modalContent" style="padding:24px">
       <div style="text-align:center;padding:40px 0">
         <i class="fas fa-spinner fa-spin" style="font-size:32px;color:var(--c-primary)"></i>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- =================== IMPORT HISTORY MODAL =================== -->
+<div id="importHistoryModal" class="modal-overlay hidden" onclick="if(event.target===this)closeImportHistoryModal()">
+  <div class="modal-box" style="max-width:760px">
+    <div style="padding:24px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <span style="font-size:16px;font-weight:800">📋 TERASS 取り込み履歴</span>
+        <button class="modal-close" onclick="closeImportHistoryModal()">&times;</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+        <label style="font-size:12px;font-weight:700;color:var(--c-text3)">期間:</label>
+        <select id="importHistoryDays" onchange="loadImportHistory()" style="padding:5px 10px;border-radius:8px;border:1.5px solid var(--c-border);background:var(--c-bg);color:var(--c-text);font-size:13px">
+          <option value="7">7日</option>
+          <option value="30" selected>30日</option>
+          <option value="90">90日</option>
+          <option value="180">180日</option>
+        </select>
+      </div>
+      <div id="importHistoryContent">
+        <div style="text-align:center;padding:40px 0"><i class="fas fa-spinner fa-spin" style="font-size:32px;color:var(--c-primary)"></i></div>
       </div>
     </div>
   </div>
@@ -2169,10 +2196,120 @@ function renderTransactions(rows, prefecture) {
   content.innerHTML = html;
 }
 
+// ── Import History Modal ──
+async function showImportHistoryModal() {
+  document.getElementById('importHistoryModal').classList.remove('hidden');
+  await loadImportHistory();
+}
+function closeImportHistoryModal() {
+  document.getElementById('importHistoryModal').classList.add('hidden');
+}
+
+async function loadImportHistory() {
+  var days = document.getElementById('importHistoryDays').value || '30';
+  var secret = localStorage.getItem('mal_admin_secret') || '';
+  if (!secret) {
+    secret = window.prompt('ADMIN_SECRET を入力してください:') || '';
+    if (secret) { try { localStorage.setItem('mal_admin_secret', secret); } catch(e) {} }
+  }
+  if (!secret) {
+    document.getElementById('importHistoryContent').innerHTML =
+      '<p style="text-align:center;color:var(--c-text3);padding:24px">認証情報が必要です</p>';
+    return;
+  }
+
+  document.getElementById('importHistoryContent').innerHTML =
+    '<div style="text-align:center;padding:40px 0"><i class="fas fa-spinner fa-spin" style="font-size:32px;color:var(--c-primary)"></i></div>';
+
+  try {
+    var headers = { 'Authorization': 'Bearer ' + secret };
+    var [summaryRes, delistedRes] = await Promise.all([
+      fetch('/api/admin/sessions/summary?days=' + days, { headers: headers }),
+      fetch('/api/admin/stats/delisted?days=' + days, { headers: headers }),
+    ]);
+
+    if (summaryRes.status === 401 || delistedRes.status === 401) {
+      try { localStorage.removeItem('mal_admin_secret'); } catch(e) {}
+      document.getElementById('importHistoryContent').innerHTML =
+        '<p style="text-align:center;color:var(--c-danger);padding:24px">認証エラー。ページを再読み込みして再入力してください。</p>';
+      return;
+    }
+
+    var summaryData = summaryRes.ok ? await summaryRes.json() : { sessions: [] };
+    var delistedData = delistedRes.ok ? await delistedRes.json() : { data: [] };
+    renderImportHistory(summaryData.sessions || [], delistedData.data || []);
+  } catch(e) {
+    document.getElementById('importHistoryContent').innerHTML =
+      '<p style="text-align:center;color:var(--c-text3);padding:24px">データを取得できませんでした</p>';
+  }
+}
+
+function renderImportHistory(sessions, delistedData) {
+  var html = '';
+
+  // ── delisted 日次グラフ ──
+  if (delistedData.length > 0) {
+    var maxCount = Math.max.apply(null, delistedData.map(function(d) { return d.count; })) || 1;
+    var bars = delistedData.map(function(d) {
+      var pct = Math.max(2, Math.round((d.count / maxCount) * 100));
+      var color = d.warning ? 'var(--c-danger)' : 'var(--c-primary)';
+      var label = d.warning ? ' ⚠️' : '';
+      var dateShort = String(d.date || '').slice(5); // MM-DD
+      return '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">'
+        + '<span style="width:40px;font-size:10px;color:var(--c-text4);text-align:right;flex-shrink:0">' + escHtml(dateShort) + '</span>'
+        + '<div style="flex:1;background:var(--c-border);border-radius:3px;height:16px;position:relative">'
+        + '<div style="width:' + pct + '%;background:' + color + ';height:100%;border-radius:3px"></div>'
+        + '</div>'
+        + '<span style="width:60px;font-size:11px;font-weight:700;color:' + color + ';flex-shrink:0">' + d.count.toLocaleString() + label + '</span>'
+        + '</div>';
+    }).join('');
+
+    html += '<div style="margin-bottom:20px">'
+      + '<div style="font-size:11px;font-weight:700;color:var(--c-text3);letter-spacing:.04em;text-transform:uppercase;margin-bottom:10px">Delisted 日次件数</div>'
+      + bars
+      + '<div style="font-size:10px;color:var(--c-text4);margin-top:6px">⚠️ = 前日比 3倍超</div>'
+      + '</div>';
+  } else {
+    html += '<div style="padding:16px;background:var(--c-bg2);border-radius:8px;margin-bottom:20px;color:var(--c-text3);font-size:13px;text-align:center">Delisted データなし</div>';
+  }
+
+  // ── セッション一覧テーブル ──
+  html += '<div style="font-size:11px;font-weight:700;color:var(--c-text3);letter-spacing:.04em;text-transform:uppercase;margin-bottom:10px">セッション一覧</div>';
+
+  if (!sessions.length) {
+    html += '<div style="text-align:center;padding:24px;color:var(--c-text3)">セッションデータなし</div>';
+  } else {
+    var statusColor = { completed: 'var(--c-success)', aborted: 'var(--c-danger)', in_progress: 'var(--c-warning)', failed: 'var(--c-danger)' };
+    var rows = sessions.map(function(s) {
+      var sc = statusColor[s.status] || 'var(--c-text3)';
+      var startedDate = String(s.started_at || '').slice(0, 16).replace('T', ' ');
+      var completedDate = s.completed_at ? String(s.completed_at).slice(0, 16).replace('T', ' ') : '-';
+      var delisted = (s.total_marked_delisted || 0).toLocaleString();
+      var imported = (s.total_imported || 0).toLocaleString();
+      var notesHtml = s.notes ? '<div style="font-size:10px;color:var(--c-text4);margin-top:2px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escAttr(s.notes) + '">' + escHtml(s.notes) + '</div>' : '';
+      return '<tr>'
+        + '<td style="font-size:11px;color:var(--c-text3)">' + escHtml(startedDate) + '</td>'
+        + '<td style="font-size:11px;color:var(--c-text3)">' + escHtml(completedDate) + '</td>'
+        + '<td><span style="font-size:11px;font-weight:700;color:' + sc + '">' + escHtml(s.status) + '</span></td>'
+        + '<td style="text-align:right;font-weight:700">' + escHtml(imported) + '</td>'
+        + '<td style="text-align:right;font-weight:700;color:var(--c-danger)">' + escHtml(delisted) + '</td>'
+        + '<td style="font-size:11px">' + escHtml(s.source || '') + notesHtml + '</td>'
+        + '</tr>';
+    }).join('');
+
+    html += '<div style="overflow-x:auto"><table class="txn-table" style="font-size:12px">'
+      + '<thead><tr><th>開始</th><th>完了</th><th>状態</th><th style="text-align:right">取込件数</th><th style="text-align:right">Delisted</th><th>備考</th></tr></thead>'
+      + '<tbody>' + rows + '</tbody>'
+      + '</table></div>';
+  }
+
+  document.getElementById('importHistoryContent').innerHTML = html;
+}
+
 // ── Init ──
 (function() {
   document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') { closeModal(); closeStatsModal(); }
+    if (e.key === 'Escape') { closeModal(); closeStatsModal(); closeImportHistoryModal(); }
   });
 })();
 </script>

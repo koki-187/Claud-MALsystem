@@ -1010,6 +1010,58 @@ admin.post('/archive/monthly', async (c) => {
   });
 });
 
+// ─── GET /api/admin/sessions/summary ─────────────────────────────────────────
+// 過去 N 日の import_sessions を一覧化 (最新順)
+admin.get('/sessions/summary', async (c) => {
+  const days = Math.max(1, Math.min(365, Number(c.req.query('days') ?? '30') || 30));
+  const rows = await safeAll<{
+    id: string;
+    source: string;
+    started_at: string;
+    completed_at: string | null;
+    status: string;
+    total_imported: number;
+    total_marked_delisted: number;
+    categories_json: string | null;
+    notes: string | null;
+  }>(c.env.MAL_DB.prepare(`
+    SELECT id, source, started_at, completed_at, status,
+           total_imported, total_marked_delisted, categories_json, notes
+    FROM import_sessions
+    WHERE started_at >= datetime('now', ?)
+    ORDER BY started_at DESC
+    LIMIT 200
+  `).bind(`-${days} days`));
+  return c.json({ days, sessions: rows.results });
+});
+
+// ─── GET /api/admin/stats/delisted ────────────────────────────────────────────
+// properties.status='delisted' を last_seen_at で日別集計。前日比 +200% で warning フラグ。
+admin.get('/stats/delisted', async (c) => {
+  const days = Math.max(1, Math.min(365, Number(c.req.query('days') ?? '30') || 30));
+  const rows = await safeAll<{ date: string; count: number }>(
+    c.env.MAL_DB.prepare(`
+      SELECT date(last_seen_at) as date, COUNT(*) as count
+      FROM properties
+      WHERE status = 'delisted'
+        AND last_seen_at >= datetime('now', ?)
+        AND last_seen_at IS NOT NULL
+      GROUP BY date(last_seen_at)
+      ORDER BY date ASC
+    `).bind(`-${days} days`)
+  );
+
+  const entries = rows.results;
+  // 前日比 +200% (= 3倍超) で warning フラグ
+  const result = entries.map((row, i) => {
+    const prev = i > 0 ? entries[i - 1].count : null;
+    const warning = prev !== null && prev > 0 && row.count > prev * 3;
+    return { date: row.date, count: row.count, warning };
+  });
+
+  return c.json({ days, data: result });
+});
+
 // ─── GET /api/admin/master/stats ─────────────────────────────────────────────
 admin.get('/master/stats', async (c) => {
   const [masterCount, unlinkedCount, statusBreakdown, siteBreakdown] = await Promise.all([
