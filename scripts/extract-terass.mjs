@@ -1,21 +1,27 @@
 #!/usr/bin/env node
 /**
- * TERASS PICKS 自動エクスポーター v2 (公式「出力」ボタン経由)
+ * TERASS PICKS 自動エクスポーター v3 (都道府県×カテゴリ段階分割)
  * =====================================================
  * 旧方式 (IndexedDB 読み取り) は TERASS のアーキテクチャ変更で機能停止。
- * 新方式: 既存 Chrome に CDP アタッチ → 各カテゴリで「出力」ボタンクリック
- *         → 確認モーダルで「実行」→ CSV ダウンロード を 6 回繰り返す。
+ * 新方式: 既存 Chrome に CDP アタッチ → 都道府県フィルタ × 各カテゴリで「出力」ボタンクリック
+ *         → 確認モーダルで「実行」→ CSV ダウンロード を最大 47×6=282 回繰り返す。
  *
  * 前提:
  *   Chrome を --remote-debugging-port=9222 オプションで起動済み
  *   TERASS PICKS にログイン済み (Chrome_CDP プロファイル推奨)
  *
- * 取得カテゴリ: mansion / house / land × 在庫 / 成約済 = 6 ファイル
+ * 取得カテゴリ: mansion / house / land × 在庫 / 成約済 = 6 ファイル/県
+ *
+ * CLI フラグ:
+ *   --prefectures=all              全 47 都道府県 (デフォルト)
+ *   --prefectures=tokyo            東京都のみ
+ *   --prefectures=tokyo,kanagawa   複数指定
+ *   --dry-run                      ブラウザ接続確認のみ
  *
  * 出力:
- *   C:/Users/reale/Downloads/TERASS_ALL_mansion_在庫.csv
- *   C:/Users/reale/Downloads/TERASS_ALL_mansion_成約済.csv
- *   ... (× house / land)
+ *   C:/Users/reale/Downloads/TERASS_東京都_マンション_在庫.csv
+ *   C:/Users/reale/Downloads/TERASS_東京都_マンション_成約済.csv
+ *   ... (× house / land × 47県)
  */
 
 import { chromium } from 'playwright';
@@ -35,6 +41,7 @@ const DRY_RUN = process.argv.includes('--dry-run');
 const DOWNLOAD_TIMEOUT_MS = 120_000;
 const NAV_TIMEOUT_MS = 30_000;
 const CATEGORY_WAIT_MS = 6_000;   // ページ遷移後の安定待ち
+const PREF_MODAL_TIMEOUT_MS = 5_000; // 都道府県モーダル表示タイムアウト
 
 // 取得対象: kind × status = 6 ファイル
 const CATEGORIES = [
@@ -46,17 +53,153 @@ const CATEGORIES = [
   { kind: 'land',    status: 'sold',   label: '土地成約済' },
 ];
 
+// 47 都道府県 (postal code 順)
+const PREFECTURES = [
+  { code: '01', name: '北海道' },
+  { code: '02', name: '青森県' },
+  { code: '03', name: '岩手県' },
+  { code: '04', name: '宮城県' },
+  { code: '05', name: '秋田県' },
+  { code: '06', name: '山形県' },
+  { code: '07', name: '福島県' },
+  { code: '08', name: '茨城県' },
+  { code: '09', name: '栃木県' },
+  { code: '10', name: '群馬県' },
+  { code: '11', name: '埼玉県' },
+  { code: '12', name: '千葉県' },
+  { code: '13', name: '東京都' },
+  { code: '14', name: '神奈川県' },
+  { code: '15', name: '新潟県' },
+  { code: '16', name: '富山県' },
+  { code: '17', name: '石川県' },
+  { code: '18', name: '福井県' },
+  { code: '19', name: '山梨県' },
+  { code: '20', name: '長野県' },
+  { code: '21', name: '岐阜県' },
+  { code: '22', name: '静岡県' },
+  { code: '23', name: '愛知県' },
+  { code: '24', name: '三重県' },
+  { code: '25', name: '滋賀県' },
+  { code: '26', name: '京都府' },
+  { code: '27', name: '大阪府' },
+  { code: '28', name: '兵庫県' },
+  { code: '29', name: '奈良県' },
+  { code: '30', name: '和歌山県' },
+  { code: '31', name: '鳥取県' },
+  { code: '32', name: '島根県' },
+  { code: '33', name: '岡山県' },
+  { code: '34', name: '広島県' },
+  { code: '35', name: '山口県' },
+  { code: '36', name: '徳島県' },
+  { code: '37', name: '香川県' },
+  { code: '38', name: '愛媛県' },
+  { code: '39', name: '高知県' },
+  { code: '40', name: '福岡県' },
+  { code: '41', name: '佐賀県' },
+  { code: '42', name: '長崎県' },
+  { code: '43', name: '熊本県' },
+  { code: '44', name: '大分県' },
+  { code: '45', name: '宮崎県' },
+  { code: '46', name: '鹿児島県' },
+  { code: '47', name: '沖縄県' },
+];
+
+// 英語キー → 都道府県名 マッピング (全 47 件)
+const PREF_EN_MAP = {
+  hokkaido:    '北海道',
+  aomori:      '青森県',
+  iwate:       '岩手県',
+  miyagi:      '宮城県',
+  akita:       '秋田県',
+  yamagata:    '山形県',
+  fukushima:   '福島県',
+  ibaraki:     '茨城県',
+  tochigi:     '栃木県',
+  gunma:       '群馬県',
+  saitama:     '埼玉県',
+  chiba:       '千葉県',
+  tokyo:       '東京都',
+  kanagawa:    '神奈川県',
+  niigata:     '新潟県',
+  toyama:      '富山県',
+  ishikawa:    '石川県',
+  fukui:       '福井県',
+  yamanashi:   '山梨県',
+  nagano:      '長野県',
+  gifu:        '岐阜県',
+  shizuoka:    '静岡県',
+  aichi:       '愛知県',
+  mie:         '三重県',
+  shiga:       '滋賀県',
+  kyoto:       '京都府',
+  osaka:       '大阪府',
+  hyogo:       '兵庫県',
+  nara:        '奈良県',
+  wakayama:    '和歌山県',
+  tottori:     '鳥取県',
+  shimane:     '島根県',
+  okayama:     '岡山県',
+  hiroshima:   '広島県',
+  yamaguchi:   '山口県',
+  tokushima:   '徳島県',
+  kagawa:      '香川県',
+  ehime:       '愛媛県',
+  kochi:       '高知県',
+  fukuoka:     '福岡県',
+  saga:        '佐賀県',
+  nagasaki:    '長崎県',
+  kumamoto:    '熊本県',
+  oita:        '大分県',
+  miyazaki:    '宮崎県',
+  kagoshima:   '鹿児島県',
+  okinawa:     '沖縄県',
+};
+
+// ===== CLI フラグ解析 =====
+/**
+ * --prefectures=all | <英語キー,英語キー,...>
+ * returns: Array<{ code, name }>
+ */
+function parsePrefsFlag() {
+  const arg = process.argv.find(a => a.startsWith('--prefectures='));
+  if (!arg) return PREFECTURES; // デフォルト: 全 47 件
+
+  const val = arg.split('=')[1].trim().toLowerCase();
+  if (val === 'all' || val === '') return PREFECTURES;
+
+  const keys = val.split(',').map(k => k.trim()).filter(Boolean);
+  const result = [];
+  for (const key of keys) {
+    const jpName = PREF_EN_MAP[key];
+    if (!jpName) {
+      warn(`不明な都道府県キー: "${key}" — スキップ`);
+      continue;
+    }
+    const pref = PREFECTURES.find(p => p.name === jpName);
+    if (pref) result.push(pref);
+  }
+  if (result.length === 0) {
+    warn('有効な都道府県が指定されていません。全 47 件を使用します。');
+    return PREFECTURES;
+  }
+  return result;
+}
+
 // ===== ログ =====
 function log(msg)  { console.log(`[extract-terass] ${msg}`); }
 function warn(msg) { console.warn(`[extract-terass] WARNING: ${msg}`); }
 function error(msg){ console.error(`[extract-terass] ERROR: ${msg}`); }
 
 // ===== ファイル名規約 =====
-function targetFilename(kind, status) {
-  // converter は filename に "マンション/戸建/土地" + "在庫/成約済" を期待
+/**
+ * prefectureName が渡された場合: TERASS_<県名>_<種別>_<ステータス>.csv
+ * 未指定 (後方互換): TERASS_ALL_<種別>_<ステータス>.csv
+ */
+function targetFilename(kind, status, prefectureName) {
   const kindJp = kind === 'mansion' ? 'マンション' : kind === 'house' ? '戸建' : '土地';
   const statusJp = status === 'sold' ? '成約済' : '在庫';
-  return `TERASS_ALL_${kindJp}_${statusJp}.csv`;
+  const prefPart = prefectureName ? prefectureName : 'ALL';
+  return `TERASS_${prefPart}_${kindJp}_${statusJp}.csv`;
 }
 
 // ===== CDP 経由で TERASS PICKS タブを取得 =====
@@ -87,8 +230,109 @@ async function ensureLoggedIn(page) {
   }
 }
 
-// ===== カテゴリ切替 (URL ナビゲーション + 在庫/成約済タブ click) =====
-async function switchCategory(page, kind, status) {
+// ===== 都道府県モーダルで1県を選択 =====
+/**
+ * 都道府県ボタンをクリック → モーダルを開く → 前回選択解除 → 指定県を選択 → 決定
+ * ボタン/モーダルが見つからない場合は warn して return (フィルタなしで継続)
+ */
+async function selectPrefecture(page, prefectureName) {
+  // 都道府県ボタン
+  const prefBtn = page.locator('button:has-text("都道府県")').first();
+  if (await prefBtn.count() === 0) {
+    warn(`  「都道府県」ボタンが見つかりません — フィルタなしで続行`);
+    return;
+  }
+
+  try {
+    await prefBtn.click({ timeout: 5000 });
+    log(`  都道府県モーダルを開く`);
+  } catch (e) {
+    warn(`  「都道府県」ボタンクリック失敗 — フィルタなしで続行: ${e.message}`);
+    return;
+  }
+
+  // モーダルが開くのを待つ (dialog role または MUI Modal)
+  const dialog = page.locator('[role="dialog"]').first();
+  try {
+    await dialog.waitFor({ state: 'visible', timeout: PREF_MODAL_TIMEOUT_MS });
+  } catch (e) {
+    warn(`  都道府県モーダルが開きません (${PREF_MODAL_TIMEOUT_MS}ms) — Escape して続行`);
+    await page.keyboard.press('Escape').catch(() => {});
+    return;
+  }
+
+  // 前回選択済みチェックボックスをすべて解除
+  try {
+    // クリアボタンがあれば優先使用
+    const clearBtn = dialog.locator('button:has-text("クリア"), button:has-text("リセット"), button:has-text("全解除")').first();
+    if (await clearBtn.count() > 0) {
+      await clearBtn.click({ timeout: 3000 });
+      log('  選択クリアボタンをクリック');
+      await page.waitForTimeout(500);
+    } else {
+      // checked な checkbox を順次解除
+      const checkedBoxes = dialog.locator('input[type="checkbox"]:checked');
+      const checkedCount = await checkedBoxes.count();
+      if (checkedCount > 0) {
+        log(`  チェック済み ${checkedCount} 件を解除`);
+        for (let i = 0; i < checkedCount; i++) {
+          const box = checkedBoxes.nth(i);
+          await box.click({ timeout: 2000 }).catch(() => {});
+        }
+        await page.waitForTimeout(300);
+      }
+    }
+  } catch (e) {
+    warn(`  選択クリア中にエラー (続行): ${e.message}`);
+  }
+
+  // 指定都道府県を選択
+  try {
+    // label:has-text でも input 内包 label でも機能する
+    const prefLabel = dialog.locator(`label:has-text("${prefectureName}")`).first();
+    if (await prefLabel.count() > 0) {
+      await prefLabel.click({ timeout: 3000 });
+      log(`  ${prefectureName} を選択`);
+    } else {
+      // fallback: テキストで直接検索
+      const prefText = dialog.locator(`text="${prefectureName}"`).first();
+      if (await prefText.count() > 0) {
+        await prefText.click({ timeout: 3000 });
+        log(`  ${prefectureName} を選択 (text locator)`);
+      } else {
+        warn(`  ${prefectureName} のチェックボックスが見つかりません — フィルタなしで続行`);
+        await page.keyboard.press('Escape').catch(() => {});
+        return;
+      }
+    }
+  } catch (e) {
+    warn(`  ${prefectureName} 選択失敗 (続行): ${e.message}`);
+    await page.keyboard.press('Escape').catch(() => {});
+    return;
+  }
+
+  await page.waitForTimeout(300);
+
+  // モーダルを閉じる: 「検索」or「決定」ボタン、なければ Escape
+  try {
+    const confirmBtn = dialog.locator('button:has-text("検索"), button:has-text("決定"), button:has-text("適用")').first();
+    if (await confirmBtn.count() > 0) {
+      await confirmBtn.click({ timeout: 3000 });
+      log('  モーダルを閉じる (確定ボタン)');
+    } else {
+      log('  確定ボタンが見つかりません — Escape で閉じる');
+      await page.keyboard.press('Escape').catch(() => {});
+    }
+  } catch (e) {
+    warn(`  モーダルクローズ失敗 — Escape: ${e.message}`);
+    await page.keyboard.press('Escape').catch(() => {});
+  }
+
+  await page.waitForTimeout(3000);
+}
+
+// ===== カテゴリ切替 (URL ナビゲーション + 在庫/成約済タブ click + 都道府県絞り込み) =====
+async function switchCategory(page, kind, status, prefectureName) {
   // 1. URL でカテゴリ切替
   const url = `https://${TERASS_HOST}/search/${kind}`;
   log(`  ナビゲート: ${url}`);
@@ -111,7 +355,12 @@ async function switchCategory(page, kind, status) {
     warn(`  ステータス切替失敗 (続行): ${e.message}`);
   }
 
-  // 3. 検索ボタンクリック (フィルタ反映)
+  // 3. 都道府県絞り込み (prefectureName が指定されている場合)
+  if (prefectureName) {
+    await selectPrefecture(page, prefectureName);
+  }
+
+  // 4. 検索ボタンクリック (フィルタ反映)
   try {
     const searchBtn = page.locator('button:has-text("検索")').first();
     if (await searchBtn.count() > 0) {
@@ -171,8 +420,18 @@ async function exportCurrent(page, ctx, dst) {
 
 // ===== メイン =====
 async function main() {
-  log('=== TERASS PICKS v2 エクスポート開始 ===');
+  log('=== TERASS PICKS v3 エクスポート開始 (都道府県×カテゴリ) ===');
   log(`モード: ${DRY_RUN ? 'DRY-RUN' : '本番実行'}`);
+
+  const targetPrefs = parsePrefsFlag();
+  log(`対象都道府県: ${targetPrefs.length} 件 (${targetPrefs.map(p => p.name).join(', ')})`);
+  log(`対象カテゴリ: ${CATEGORIES.length} 件`);
+  log(`合計: ${targetPrefs.length * CATEGORIES.length} ファイル予定`);
+
+  if (DRY_RUN) {
+    log('DRY-RUN: フラグ解析 OK。ブラウザ接続はスキップ');
+    return { success: true, dryRun: true, downloadedFiles: [] };
+  }
 
   log(`Chrome CDP に接続中: ${CDP_URL}`);
   const browser = await chromium.connectOverCDP(CDP_URL);
@@ -181,38 +440,45 @@ async function main() {
   const { ctx, page } = await getOrCreateTerassPage(browser);
   await ensureLoggedIn(page);
 
-  if (DRY_RUN) {
-    log('DRY-RUN: アタッチ + ログイン確認 OK。エクスポートはスキップ');
-    await browser.close().catch(() => {});
-    return { success: true, dryRun: true, downloadedFiles: [] };
-  }
-
   const downloadedFiles = [];
   const errors = [];
+  const totalItems = targetPrefs.length * CATEGORIES.length;
+  let itemIndex = 0;
 
-  for (const cat of CATEGORIES) {
-    log('');
-    log(`▶ ${cat.label} (${cat.kind} / ${cat.status})`);
-    try {
-      await switchCategory(page, cat.kind, cat.status);
-      const fname = targetFilename(cat.kind, cat.status);
-      const dst = join(DOWNLOADS_DIR, fname);
-      await exportCurrent(page, ctx, dst);
-      downloadedFiles.push({ filename: fname, path: dst, ...cat });
-    } catch (e) {
-      error(`  ${cat.label} 失敗: ${e.message}`);
-      errors.push({ category: cat.label, error: e.message });
+  for (const pref of targetPrefs) {
+    for (const cat of CATEGORIES) {
+      itemIndex++;
+      const prefIdx = targetPrefs.indexOf(pref) + 1;
+      const catIdx = CATEGORIES.indexOf(cat) + 1;
+      log('');
+      log(`▶ ${pref.name} / ${cat.label} (${prefIdx}/${targetPrefs.length} 県, ${catIdx}/${CATEGORIES.length} カテゴリ, 通算 ${itemIndex}/${totalItems})`);
+
+      try {
+        await switchCategory(page, cat.kind, cat.status, pref.name);
+        const fname = targetFilename(cat.kind, cat.status, pref.name);
+        const dst = join(DOWNLOADS_DIR, fname);
+        await exportCurrent(page, ctx, dst);
+        downloadedFiles.push({ filename: fname, path: dst, prefecture: pref, ...cat });
+      } catch (e) {
+        error(`  ${pref.name} / ${cat.label} 失敗: ${e.message}`);
+        errors.push({ prefecture: pref.name, category: cat.label, error: e.message });
+      }
     }
   }
 
   // CDP attach の場合は disconnect のみ — Chrome 本体は閉じない
   await browser.close().catch(() => {});
 
+  const successCount = downloadedFiles.length;
+  const failCount = errors.length;
+  const skipCount = totalItems - successCount - failCount;
+
   log('');
-  log(`=== エクスポート完了: ${downloadedFiles.length}/${CATEGORIES.length} 成功 ===`);
-  downloadedFiles.forEach(f => log(`  ✓ ${f.label}: ${f.filename}`));
+  log(`=== エクスポート完了 ===`);
+  log(`成功 ${successCount} / 失敗 ${failCount} / スキップ ${skipCount} (合計 ${totalItems})`);
+  downloadedFiles.forEach(f => log(`  ✓ ${f.prefecture.name} / ${f.label}: ${f.filename}`));
   if (errors.length > 0) {
-    errors.forEach(e => warn(`  ✗ ${e.category}: ${e.error}`));
+    errors.forEach(e => warn(`  ✗ ${e.prefecture} / ${e.category}: ${e.error}`));
   }
 
   // 1 ファイルでも取れたら convert + import

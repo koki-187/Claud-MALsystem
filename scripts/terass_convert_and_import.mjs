@@ -17,6 +17,47 @@ const API_URL = process.argv.find(a => a.startsWith('--api-url='))?.split('=')[1
   || process.env.MAL_API_URL
   || 'https://mal-search-system.navigator-187.workers.dev/api/admin/import';
 const ADMIN_SECRET = process.env.ADMIN_SECRET || '';
+// API_URL から base を導出 (session start/complete 用)
+const API_BASE = API_URL.replace(/\/api\/admin\/import\/?$/, '');
+const ABORT_THRESHOLD = process.env.DELISTED_ABORT_THRESHOLD || '0.30';
+// TERASS export limit: 10,000 行ぴったり / >= 9990 で打ち切り扱い
+const HIT_LIMIT_THRESHOLD = 9990;
+
+// ファイル名 → カテゴリキー (mansion_active_13 等、prefecture コード付き)
+function detectCategoryKey(filename) {
+  const t = detectPropertyType(filename); // mansion / kodate / tochi / other
+  const s = detectStatus(filename);       // active / sold
+  const typeKey = t === 'mansion' ? 'mansion'
+                : t === 'kodate'  ? 'house'
+                : t === 'tochi'   ? 'land'
+                : 'other';
+  const prefCode = extractPrefectureCodeFromFilename(filename);
+  return prefCode ? `${typeKey}_${s}_${prefCode}` : `${typeKey}_${s}`;
+}
+
+// ファイル名から都道府県コードを抽出
+// 例: TERASS_東京都_マンション_在庫.csv → '13'
+//     TERASS_ALL_マンション_在庫.csv   → null (後方互換)
+function extractPrefectureCodeFromFilename(filename) {
+  // TERASS_<県名>_<種別>_<ステータス>.csv の形式を期待
+  // 2番目の _ 区切りセグメントが都道府県名かどうか確認
+  const base = filename.replace(/\.csv$/i, '');
+  const parts = base.split('_');
+  // parts[0]='TERASS', parts[1]=県名 or 'ALL'
+  if (parts.length < 2) return null;
+  const prefCandidate = parts[1];
+  if (!prefCandidate || prefCandidate === 'ALL') return null;
+  // PREF_MAP のキー (「東京」「北海道」等) と完全一致または前方一致
+  for (const [name, code] of Object.entries(PREF_MAP)) {
+    if (prefCandidate.startsWith(name) || prefCandidate === name + '都' || prefCandidate === name + '道' ||
+        prefCandidate === name + '府' || prefCandidate === name + '県') {
+      return code;
+    }
+    // 「東京都」→ PREF_MAP には「東京」でマッチ
+    if (prefCandidate.includes(name)) return code;
+  }
+  return null;
+}
 
 // 都道府県名→コード
 const PREF_MAP = {
@@ -220,6 +261,30 @@ async function main() {
   let grandTotalFiles = 0;
   const importResults = [];
 
+  // ===== セッション開始 (delisted 検知用) =====
+  let sessionId = null;
+  if (!DRY_RUN) {
+    try {
+      const startUrl = `${API_BASE}/api/admin/import/session/start`;
+      const headers = { 'Content-Type': 'application/json' };
+      if (ADMIN_SECRET) headers['Authorization'] = `Bearer ${ADMIN_SECRET}`;
+      const resp = await fetch(startUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ source: 'terass' }),
+      });
+      if (resp.ok) {
+        const j = await resp.json();
+        sessionId = j.sessionId;
+        console.log(`🆔 Import session 開始: ${sessionId}`);
+      } else {
+        console.warn(`⚠️ session 開始失敗 (HTTP ${resp.status}) — delisted 検知なしで続行`);
+      }
+    } catch (err) {
+      console.warn(`⚠️ session 開始失敗: ${err.message} — delisted 検知なしで続行`);
+    }
+  }
+
   for (const file of files) {
     console.log(`\n📄 処理中: ${file}`);
 
@@ -345,7 +410,21 @@ async function main() {
 
         const headers = {};
         if (ADMIN_SECRET) headers['Authorization'] = `Bearer ${ADMIN_SECRET}`;
-        const resp = await fetch(API_URL, {
+
+        // session / category / hit_export_limit を URL に付与
+        const categoryKey = detectCategoryKey(file);
+        const hitLimit = malRows.length >= HIT_LIMIT_THRESHOLD ? '1' : '0';
+        const qs = new URLSearchParams();
+        if (sessionId) qs.set('session', sessionId);
+        qs.set('category', categoryKey);
+        qs.set('hit_export_limit', hitLimit);
+        const importUrl = `${API_URL}${API_URL.includes('?') ? '&' : '?'}${qs.toString()}`;
+
+        if (hitLimit === '1') {
+          console.log(`  ⚠️ 10000行打ち切り検知 (${malRows.length}行) — このカテゴリは delisted 対象から除外`);
+        }
+
+        const resp = await fetch(importUrl, {
           method: 'POST',
           body: formData,
           headers
@@ -388,6 +467,30 @@ async function main() {
     if (failures.length > 0) {
       console.log('\n失敗ファイル:');
       failures.forEach(f => console.log(`  - ${f.file}: ${f.error}`));
+    }
+  }
+
+  // ===== セッション完了 (delisted 検知実行) =====
+  if (!DRY_RUN && sessionId) {
+    try {
+      const completeUrl = `${API_BASE}/api/admin/import/session/complete?session=${encodeURIComponent(sessionId)}&abort_threshold=${encodeURIComponent(ABORT_THRESHOLD)}`;
+      const headers = {};
+      if (ADMIN_SECRET) headers['Authorization'] = `Bearer ${ADMIN_SECRET}`;
+      const resp = await fetch(completeUrl, { method: 'POST', headers });
+      if (resp.ok) {
+        const j = await resp.json();
+        if (j.aborted) {
+          console.log(`\n⛔ Delisted 検知 ABORT (${j.reason}) ratio=${(j.ratio * 100).toFixed(2)}% threshold=${(ABORT_THRESHOLD * 100).toFixed(0)}%`);
+        } else {
+          console.log(`\n🗑️ Delisted マーク完了: ${j.totalMarkedDelisted}件 (ratio=${(j.ratio * 100).toFixed(2)}%)`);
+        }
+        console.log('  カテゴリ別:', JSON.stringify(j.byCategory, null, 2));
+      } else {
+        const errText = await resp.text();
+        console.error(`❌ session complete エラー: HTTP ${resp.status} - ${errText.substring(0, 200)}`);
+      }
+    } catch (err) {
+      console.error(`❌ session complete 失敗: ${err.message}`);
     }
   }
   console.log('='.repeat(60));

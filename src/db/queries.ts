@@ -120,7 +120,8 @@ export async function searchProperties(
 
   const properties: Property[] = (rows.results ?? []).map(rowToProperty);
 
-  const allSites: SiteId[] = ['suumo', 'homes', 'athome', 'fudosan', 'chintai', 'smaity', 'reins', 'kenbiya', 'rakumachi', 'terass_reins', 'terass_suumo', 'terass_athome'];
+  // suumo / athome / reins の直接スクレイパーは削除済み。D1 既存行は残るが UI には terass_* 経由で表示する。
+  const allSites: SiteId[] = ['homes', 'fudosan', 'chintai', 'smaity', 'kenbiya', 'rakumachi', 'terass_reins', 'terass_suumo', 'terass_athome'];
   const siteCountRows = await db
     .prepare(`SELECT site_id, COUNT(*) as cnt FROM properties p ${whereSQL} GROUP BY site_id`)
     .bind(...bindings)

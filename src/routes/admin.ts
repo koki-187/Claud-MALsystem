@@ -211,10 +211,171 @@ admin.get('/export.csv', async (c) => {
   return new Response(readable, { headers });
 });
 
+// ─── POST /api/admin/import/session/start ────────────────────────────────────
+// TERASS フルインポート1回分のセッションを作成 (delisted 検知の基準点)
+admin.post('/import/session/start', async (c) => {
+  let body: { source?: string };
+  try {
+    body = await c.req.json<{ source?: string }>();
+  } catch {
+    body = {};
+  }
+  const source = body.source || 'terass';
+  const sessionId = crypto.randomUUID();
+  await c.env.MAL_DB.prepare(`
+    INSERT INTO import_sessions (id, source, started_at, status, categories_json, total_imported)
+    VALUES (?, ?, datetime('now'), 'in_progress', '{}', 0)
+  `).bind(sessionId, source).run();
+  return c.json({ sessionId });
+});
+
+// ─── POST /api/admin/import/session/complete ─────────────────────────────────
+// session で touch されなかった active 物件を delisted にマーク。
+// hit_export_limit=true のカテゴリは TERASS 10000 行打ち切り発生のため除外。
+admin.post('/import/session/complete', async (c) => {
+  const sessionId = c.req.query('session');
+  if (!sessionId) return c.json({ error: 'session query parameter required' }, 400);
+  const dryRun = c.req.query('dry_run') === '1' || c.req.query('dry_run') === 'true';
+  const abortThreshold = Math.max(0, Math.min(1, Number(c.req.query('abort_threshold') ?? '0.30') || 0.30));
+
+  const db = c.env.MAL_DB;
+  const sessionRow = await safeFirst<{
+    id: string; source: string; status: string;
+    categories_json: string | null; total_imported: number;
+  }>(db.prepare(`SELECT id, source, status, categories_json, total_imported FROM import_sessions WHERE id=?`).bind(sessionId));
+  if (!sessionRow) return c.json({ error: 'session not found' }, 404);
+
+  let categories: Record<string, { rowCount?: number; hitLimit?: boolean }> = {};
+  try { categories = JSON.parse(sessionRow.categories_json || '{}'); } catch { categories = {}; }
+
+  // インポート 0 件のセッションは自動 abort (TERASS 全失敗を保護)
+  if ((sessionRow.total_imported ?? 0) === 0) {
+    await db.prepare(`
+      UPDATE import_sessions
+      SET status='aborted', completed_at=datetime('now'),
+          notes='auto-aborted: zero imports'
+      WHERE id=?
+    `).bind(sessionId).run();
+    return c.json({ sessionId, dryRun, aborted: true, reason: 'zero_imports', byCategory: {}, totalMarkedDelisted: 0, ratio: 0 });
+  }
+
+  // カテゴリキー → (property_type, status) フィルタ
+  const CAT_MAP: Record<string, { property_type: string; status: string }> = {
+    mansion_active: { property_type: 'mansion', status: 'active' },
+    mansion_sold:   { property_type: 'mansion', status: 'sold'   },
+    house_active:   { property_type: 'kodate',  status: 'active' },
+    house_sold:     { property_type: 'kodate',  status: 'sold'   },
+    land_active:    { property_type: 'tochi',   status: 'active' },
+    land_sold:      { property_type: 'tochi',   status: 'sold'   },
+  };
+
+  // delisted 検知は active 物件のみが対象 (sold 物件は触らない)
+  const targetCats = Object.entries(categories)
+    .filter(([key, info]) => {
+      const m = CAT_MAP[key];
+      return m && m.status === 'active' && !info.hitLimit;
+    })
+    .map(([key]) => key);
+
+  const byCategory: Record<string, { candidates: number; activeTotal: number; ratio: number; marked: number; skipped?: string }> = {};
+  // hitLimit カテゴリも記録 (skipped)
+  for (const [key, info] of Object.entries(categories)) {
+    const m = CAT_MAP[key];
+    if (!m) continue;
+    if (m.status === 'active' && info.hitLimit) {
+      byCategory[key] = { candidates: 0, activeTotal: 0, ratio: 0, marked: 0, skipped: 'hit_export_limit' };
+    }
+  }
+
+  let aggregateCandidates = 0;
+  let aggregateActiveTotal = 0;
+
+  for (const key of targetCats) {
+    const m = CAT_MAP[key]!;
+    const candRow = await safeFirst<{ cnt: number }>(db.prepare(`
+      SELECT COUNT(*) as cnt FROM properties
+      WHERE site_id LIKE 'terass_%'
+        AND property_type = ?
+        AND status = 'active'
+        AND (import_session_id IS NULL OR import_session_id != ?)
+    `).bind(m.property_type, sessionId));
+    const totalRow = await safeFirst<{ cnt: number }>(db.prepare(`
+      SELECT COUNT(*) as cnt FROM properties
+      WHERE site_id LIKE 'terass_%'
+        AND property_type = ?
+        AND status = 'active'
+    `).bind(m.property_type));
+    const candidates = candRow?.cnt ?? 0;
+    const activeTotal = totalRow?.cnt ?? 0;
+    const ratio = activeTotal > 0 ? candidates / activeTotal : 0;
+    byCategory[key] = { candidates, activeTotal, ratio, marked: 0 };
+    aggregateCandidates += candidates;
+    aggregateActiveTotal += activeTotal;
+  }
+
+  const overallRatio = aggregateActiveTotal > 0 ? aggregateCandidates / aggregateActiveTotal : 0;
+
+  // 閾値超え → abort (DB 書き換えなし)
+  if (overallRatio > abortThreshold) {
+    await db.prepare(`
+      UPDATE import_sessions
+      SET status='aborted', completed_at=datetime('now'),
+          notes=?
+      WHERE id=?
+    `).bind(`threshold_exceeded ratio=${overallRatio.toFixed(4)} threshold=${abortThreshold}`, sessionId).run();
+    return c.json({
+      sessionId, dryRun, aborted: true, reason: 'threshold_exceeded',
+      ratio: overallRatio, threshold: abortThreshold, byCategory,
+      totalMarkedDelisted: 0,
+    });
+  }
+
+  if (dryRun) {
+    return c.json({
+      sessionId, dryRun: true, aborted: false,
+      ratio: overallRatio, byCategory, totalMarkedDelisted: 0,
+    });
+  }
+
+  // 本番: UPDATE で delisted マーク
+  let totalMarked = 0;
+  for (const key of targetCats) {
+    const m = CAT_MAP[key]!;
+    // 注: properties に delisted_at 列は存在しない (schema 0001-0006 確認済み)。
+    // sold_at を「ステータス変更日」として流用 (aggregator も sold マーク時に sold_at を使用)。
+    const r = await db.prepare(`
+      UPDATE properties
+      SET status='delisted', sold_at=datetime('now'), updated_at=datetime('now')
+      WHERE site_id LIKE 'terass_%'
+        AND property_type = ?
+        AND status = 'active'
+        AND (import_session_id IS NULL OR import_session_id != ?)
+    `).bind(m.property_type, sessionId).run();
+    const marked = (r.meta?.changes as number | undefined) ?? 0;
+    byCategory[key].marked = marked;
+    totalMarked += marked;
+  }
+
+  await db.prepare(`
+    UPDATE import_sessions
+    SET status='completed', completed_at=datetime('now'),
+        total_marked_delisted=?
+    WHERE id=?
+  `).bind(totalMarked, sessionId).run();
+
+  return c.json({
+    sessionId, dryRun: false, aborted: false,
+    ratio: overallRatio, byCategory, totalMarkedDelisted: totalMarked,
+  });
+});
+
 // ─── POST /api/admin/import ───────────────────────────────────────────────────
 admin.post('/import', async (c) => {
   const env = c.env;
   const importId = crypto.randomUUID();
+  const sessionId = c.req.query('session') || null;
+  const category = c.req.query('category') || null;
+  const hitExportLimit = c.req.query('hit_export_limit') === '1' || c.req.query('hit_export_limit') === 'true';
 
   let formData: FormData;
   try {
@@ -268,6 +429,9 @@ admin.post('/import', async (c) => {
     const id = `${siteId}_${sitePropertyId}`;
 
     try {
+      // session 指定時は last_seen_at と import_session_id を datetime('now') / sessionId で上書き。
+      // ON CONFLICT 句でも更新して「途中失敗 = 一部だけ古い」リスクを軽減。
+      const effectiveLastSeen = sessionId ? null /* SQL 側で datetime('now') を使う */ : (row['last_seen_at'] || null);
       await env.MAL_DB.prepare(`
         INSERT INTO properties (
           id, site_id, site_property_id, title, property_type, status,
@@ -276,7 +440,7 @@ admin.post('/import', async (c) => {
           management_fee, repair_fund, direction, structure,
           yield_rate, thumbnail_url, detail_url, description,
           fingerprint, latitude, longitude,
-          listed_at, sold_at, last_seen_at,
+          listed_at, sold_at, last_seen_at, import_session_id,
           created_at, updated_at, scraped_at
         ) VALUES (
           ?, ?, ?, ?, ?, ?,
@@ -285,47 +449,79 @@ admin.post('/import', async (c) => {
           ?, ?, ?, ?,
           ?, ?, ?, ?,
           ?, ?, ?,
-          ?, ?, ?,
+          ?, ?, ${sessionId ? `datetime('now')` : `?`}, ?,
           datetime('now'), datetime('now'), datetime('now')
         )
         ON CONFLICT(site_id, site_property_id) DO UPDATE SET
-          title          = excluded.title,
-          price          = excluded.price,
-          price_text     = excluded.price_text,
-          status         = excluded.status,
-          description    = excluded.description,
-          fingerprint    = excluded.fingerprint,
-          management_fee = excluded.management_fee,
-          repair_fund    = excluded.repair_fund,
-          direction      = excluded.direction,
-          structure      = excluded.structure,
-          updated_at     = datetime('now')
+          title             = excluded.title,
+          price             = excluded.price,
+          price_text        = excluded.price_text,
+          status            = excluded.status,
+          description       = excluded.description,
+          fingerprint       = excluded.fingerprint,
+          management_fee    = excluded.management_fee,
+          repair_fund       = excluded.repair_fund,
+          direction         = excluded.direction,
+          structure         = excluded.structure,
+          last_seen_at      = excluded.last_seen_at,
+          import_session_id = excluded.import_session_id,
+          updated_at        = datetime('now')
       `).bind(
-        id, siteId, sitePropertyId,
-        row['title'] || '', row['property_type'] || 'other', row['status'] || 'active',
-        row['prefecture'] || '13', row['city'] || '', row['address'] || null,
-        row['price'] ? parseInt(row['price']) : null,
-        row['price_text'] || '',
-        row['area'] ? parseFloat(row['area']) : null,
-        row['rooms'] || null,
-        row['age'] ? parseInt(row['age']) : null,
-        row['floor'] ? parseInt(row['floor']) : null,
-        row['station'] || null,
-        row['station_minutes'] ? parseInt(row['station_minutes']) : null,
-        row['management_fee'] ? parseInt(row['management_fee']) : null,
-        row['repair_fund'] ? parseInt(row['repair_fund']) : null,
-        row['direction'] || null,
-        row['structure'] || null,
-        row['yield_rate'] ? parseFloat(row['yield_rate']) : null,
-        row['thumbnail_url'] || null,
-        row['detail_url'] || '',
-        row['description'] || null,
-        row['fingerprint'] || null,
-        row['latitude'] ? parseFloat(row['latitude']) : null,
-        row['longitude'] ? parseFloat(row['longitude']) : null,
-        row['listed_at'] || null,
-        row['sold_at'] || null,
-        row['last_seen_at'] || null,
+        ...(sessionId ? [
+          id, siteId, sitePropertyId,
+          row['title'] || '', row['property_type'] || 'other', row['status'] || 'active',
+          row['prefecture'] || '13', row['city'] || '', row['address'] || null,
+          row['price'] ? parseInt(row['price']) : null,
+          row['price_text'] || '',
+          row['area'] ? parseFloat(row['area']) : null,
+          row['rooms'] || null,
+          row['age'] ? parseInt(row['age']) : null,
+          row['floor'] ? parseInt(row['floor']) : null,
+          row['station'] || null,
+          row['station_minutes'] ? parseInt(row['station_minutes']) : null,
+          row['management_fee'] ? parseInt(row['management_fee']) : null,
+          row['repair_fund'] ? parseInt(row['repair_fund']) : null,
+          row['direction'] || null,
+          row['structure'] || null,
+          row['yield_rate'] ? parseFloat(row['yield_rate']) : null,
+          row['thumbnail_url'] || null,
+          row['detail_url'] || '',
+          row['description'] || null,
+          row['fingerprint'] || null,
+          row['latitude'] ? parseFloat(row['latitude']) : null,
+          row['longitude'] ? parseFloat(row['longitude']) : null,
+          row['listed_at'] || null,
+          row['sold_at'] || null,
+          // last_seen_at は SQL 側で datetime('now') 固定 → bind から除外
+          sessionId,
+        ] : [
+          id, siteId, sitePropertyId,
+          row['title'] || '', row['property_type'] || 'other', row['status'] || 'active',
+          row['prefecture'] || '13', row['city'] || '', row['address'] || null,
+          row['price'] ? parseInt(row['price']) : null,
+          row['price_text'] || '',
+          row['area'] ? parseFloat(row['area']) : null,
+          row['rooms'] || null,
+          row['age'] ? parseInt(row['age']) : null,
+          row['floor'] ? parseInt(row['floor']) : null,
+          row['station'] || null,
+          row['station_minutes'] ? parseInt(row['station_minutes']) : null,
+          row['management_fee'] ? parseInt(row['management_fee']) : null,
+          row['repair_fund'] ? parseInt(row['repair_fund']) : null,
+          row['direction'] || null,
+          row['structure'] || null,
+          row['yield_rate'] ? parseFloat(row['yield_rate']) : null,
+          row['thumbnail_url'] || null,
+          row['detail_url'] || '',
+          row['description'] || null,
+          row['fingerprint'] || null,
+          row['latitude'] ? parseFloat(row['latitude']) : null,
+          row['longitude'] ? parseFloat(row['longitude']) : null,
+          row['listed_at'] || null,
+          row['sold_at'] || null,
+          effectiveLastSeen,
+          null, // import_session_id
+        ])
       ).run();
       importedRows++;
     } catch (e) {
@@ -345,8 +541,32 @@ admin.post('/import', async (c) => {
     WHERE id=?
   `).bind(totalRows, importedRows, skippedRows, errorRows, errorLog, importId).run();
 
+  // session 連携: categories_json に当該カテゴリの結果をマージ + total_imported を加算
+  if (sessionId) {
+    try {
+      const sess = await safeFirst<{ categories_json: string | null; total_imported: number }>(
+        env.MAL_DB.prepare(`SELECT categories_json, total_imported FROM import_sessions WHERE id=?`).bind(sessionId)
+      );
+      if (sess) {
+        let cats: Record<string, { rowCount: number; hitLimit: boolean }> = {};
+        try { cats = JSON.parse(sess.categories_json || '{}'); } catch { cats = {}; }
+        const key = category || `unknown_${importId.slice(0, 6)}`;
+        cats[key] = { rowCount: importedRows, hitLimit: hitExportLimit };
+        const newTotal = (sess.total_imported ?? 0) + importedRows;
+        await env.MAL_DB.prepare(`
+          UPDATE import_sessions SET categories_json=?, total_imported=? WHERE id=?
+        `).bind(JSON.stringify(cats), newTotal, sessionId).run();
+      }
+    } catch (e) {
+      console.error('[admin/import] session update failed:', e);
+    }
+  }
+
   return c.json({
     importId,
+    sessionId,
+    category,
+    hitExportLimit,
     totalRows,
     importedRows,
     skippedRows,

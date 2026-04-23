@@ -2,21 +2,20 @@ import type { Property, SearchParams, SiteId, SiteSearchResult, PrefectureCode }
 import type { Bindings } from '../types';
 import { enqueueAll } from '../services/image-pipeline';
 import type { BaseScraper } from './base';
-import { SuumoScraper } from './suumo';
 import { HomesScraper } from './homes';
-import { AthomeScraper } from './athome';
 import { FudosanScraper } from './fudosan';
 import { ChintaiScraper } from './chintai';
 import { SmaityScraper } from './smaity';
-import { ReinsScraper } from './reins';
 import { KenbiyaScraper } from './kenbiya';
 import { RakumachiScraper } from './rakumachi';
 
 const SCRAPER_TIMEOUT_MS = 20000;
 
+// suumo / athome / reins は TERASS PICKS CSV 経由でインポート済み (site_id='terass_suumo' 等)。
+// 直接スクレイパーは重複となるため削除。terass_* はライブスクレイパー不要。
 const ALL_SITE_IDS: SiteId[] = [
-  'suumo', 'homes', 'athome', 'fudosan', 'chintai',
-  'smaity', 'reins', 'kenbiya', 'rakumachi',
+  'homes', 'fudosan', 'chintai',
+  'smaity', 'kenbiya', 'rakumachi',
 ];
 
 /**
@@ -35,16 +34,14 @@ const PREFECTURE_ROTATION: PrefectureCode[][] = [
 
 function createScrapers(): Partial<Record<SiteId, BaseScraper>> {
   return {
-    suumo:     new SuumoScraper(),
     homes:     new HomesScraper(),
-    athome:    new AthomeScraper(),
     fudosan:   new FudosanScraper(),
     chintai:   new ChintaiScraper(),
     smaity:    new SmaityScraper(),
-    reins:     new ReinsScraper(),
     kenbiya:   new KenbiyaScraper(),
     rakumachi: new RakumachiScraper(),
     // terass_* are DB-only (imported via CSV); no live scraper
+    // suumo / athome / reins removed: covered by terass_suumo / terass_athome / terass_reins
   };
 }
 
@@ -132,7 +129,7 @@ export async function aggregateSearch(
       siteResults.push(result.value.result);
     } else {
       siteResults.push({
-        siteId: siteIds[i] ?? ('suumo' as SiteId),
+        siteId: siteIds[i] ?? ('homes' as SiteId),
         count: 0,
         status: 'error',
         errorMessage: result.reason?.message ?? 'Unknown error',

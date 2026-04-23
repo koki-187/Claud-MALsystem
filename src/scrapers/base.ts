@@ -104,7 +104,7 @@ export abstract class BaseScraper {
       this.windowStart = now;
     }
 
-    if (this.requestCount >= site.rateLimit) {
+    if (this.requestCount >= (site?.rateLimit ?? 10)) {
       const waitMs = windowMs - (now - this.windowStart) + 100;
       await this.sleep(waitMs);
       this.requestCount = 0;

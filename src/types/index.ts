@@ -20,6 +20,9 @@ export const PREFECTURES: Record<PrefectureCode, string> = {
   '46': '鹿児島県', '47': '沖縄県',
 };
 
+// 'suumo' | 'athome' | 'reins' は直接スクレイパーを削除済みだが、D1 の既存行との
+// 型互換性を維持するため SiteId に残す。新規スクレイピングは行わない。
+// 新規データは terass_suumo / terass_athome / terass_reins として取り込まれる。
 export type SiteId = 'suumo' | 'homes' | 'athome' | 'fudosan' | 'chintai' | 'smaity' | 'reins' | 'kenbiya' | 'rakumachi'
   | 'terass_reins' | 'terass_suumo' | 'terass_athome';
 
@@ -32,14 +35,14 @@ export interface SiteConfig {
   rateLimit: number;
 }
 
-export const SITES: Record<SiteId, SiteConfig> = {
-  suumo:        { id: 'suumo',        name: 'SUUMO',         url: 'https://suumo.jp',                      logo: '🏠', color: '#00A960', rateLimit: 10 },
+// 'suumo' / 'athome' / 'reins' は直接スクレイパーを削除したため SITES から除外。
+// これらの site_id は D1 の既存レコードにのみ存在し、ライブスクレイピングは行わない。
+// UI 表示が必要な場合は terass_* エントリを参照すること。
+export const SITES: Partial<Record<SiteId, SiteConfig>> = {
   homes:        { id: 'homes',        name: "HOME'S",        url: 'https://www.homes.co.jp',               logo: '🏡', color: '#FF6B35', rateLimit: 10 },
-  athome:       { id: 'athome',       name: 'AtHome',        url: 'https://www.athome.co.jp',              logo: '🏘', color: '#0066CC', rateLimit: 10 },
   fudosan:      { id: 'fudosan',      name: '不動産Japan',    url: 'https://fudosan.jp',                    logo: '🏗', color: '#E74C3C', rateLimit: 8  },
   chintai:      { id: 'chintai',      name: 'CHINTAI',       url: 'https://chintai.net',                   logo: '🏢', color: '#9B59B6', rateLimit: 8  },
   smaity:       { id: 'smaity',       name: 'Smaity',        url: 'https://smaity.com',                    logo: '🏬', color: '#F39C12', rateLimit: 6  },
-  reins:        { id: 'reins',        name: 'REINS',         url: 'https://www.reins.or.jp',               logo: '📋', color: '#2ECC71', rateLimit: 5  },
   kenbiya:      { id: 'kenbiya',      name: '健美家',         url: 'https://www.kenbiya.com',               logo: '💰', color: '#DC2626', rateLimit: 8  },
   rakumachi:    { id: 'rakumachi',    name: '楽待',           url: 'https://www.rakumachi.jp',              logo: '📈', color: '#7C3AED', rateLimit: 8  },
   terass_reins: { id: 'terass_reins', name: 'TERASS-REINS',  url: 'https://picks-agent.terass.com',       logo: '📋', color: '#10B981', rateLimit: 0  },
