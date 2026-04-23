@@ -396,7 +396,24 @@ async function switchCategory(page, kind, status, prefectureName) {
     }
   }
   log(`  ナビゲート: ${url}`);
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+  // SPA のクライアントナビと重なると ERR_ABORTED が出るため:
+  //   1) waitUntil: 'commit' で早期 resolve
+  //   2) ERR_ABORTED は無視して body 表示待ちに切替
+  try {
+    await page.goto(url, { waitUntil: 'commit', timeout: NAV_TIMEOUT_MS });
+  } catch (e) {
+    if (!/ERR_ABORTED|net::ERR_ABORTED/.test(e.message)) throw e;
+    warn(`  goto ERR_ABORTED 無視 (SPA 内部ナビ競合)`);
+  }
+  await page.waitForLoadState('domcontentloaded', { timeout: NAV_TIMEOUT_MS }).catch(() => {});
+  // Fix 3: params が SPA に届いているか確認 — 消失時はリトライ
+  if (prefectureName) {
+    const currentUrl = page.url();
+    if (!currentUrl.includes('params=')) {
+      warn(`  params 消失検知 → リトライ`);
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }).catch(() => {});
+    }
+  }
   await page.waitForTimeout(CATEGORY_WAIT_MS);
 
   // 2. ステータスタブ切替 (在庫 / 成約済) — TERASS UI のラベルテキストでクリック
@@ -431,14 +448,30 @@ async function switchCategory(page, kind, status, prefectureName) {
     if (await searchBtn.count() > 0) {
       await searchBtn.click({ timeout: 5000, force: true });
       log('  検索ボタンクリック');
-      await page.waitForTimeout(4000);
+      // Fix 1: 固定 4s ではなく API 完了シグナル (件数テキスト変化) を待つ
+      await page.waitForFunction(
+        () => {
+          const t = document.body.innerText || '';
+          return /[1-9][0-9,]*\s*件/.test(t) || /該当するデータ|No rows|no data|データがありません/i.test(t);
+        },
+        { timeout: 12000, polling: 500 }
+      ).catch(() => {});
+      await page.waitForTimeout(1200);
     } else {
       // fallback: 任意の検索ボタン
       const fb = page.locator('button:has-text("検索")').first();
       if (await fb.count() > 0) {
         await fb.click({ timeout: 5000, force: true });
         log('  検索ボタンクリック (fallback)');
-        await page.waitForTimeout(4000);
+        // Fix 1: 固定 4s ではなく API 完了シグナル (件数テキスト変化) を待つ
+      await page.waitForFunction(
+        () => {
+          const t = document.body.innerText || '';
+          return /[1-9][0-9,]*\s*件/.test(t) || /該当するデータ|No rows|no data|データがありません/i.test(t);
+        },
+        { timeout: 12000, polling: 500 }
+      ).catch(() => {});
+      await page.waitForTimeout(1200);
       }
     }
   } catch (e) {
@@ -456,6 +489,8 @@ async function exportCurrent(page, ctx, dst) {
 
   // ダウンロードイベントを先にリッスン (page スコープ — ctx では発火しない)
   const downloadPromise = page.waitForEvent('download', { timeout: DOWNLOAD_TIMEOUT_MS });
+  // throw 時の unhandled rejection 抑止 (後続で await されない場合に備える)
+  downloadPromise.catch(() => {});
 
   // 0件検知: ページ上の「0件」「0 件」「該当するデータはありません」「no data」を先にチェック
   const zeroRows = await page.evaluate(() => {
@@ -477,12 +512,19 @@ async function exportCurrent(page, ctx, dst) {
   }
   await outputBtn.click({ timeout: 5000 });
   log('  「出力」メニューを開く');
-  await page.waitForTimeout(1200);
+  // Fix 2: menuitem が DOM に出るまで待機 (MUI Menu アニメーション)
+  await page.waitForSelector('[role="menu"] [role="menuitem"]', { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(500);
 
   // 「全件一括出力」セクションの "CSV" を選択
   // 有効な (Mui-disabled でない) "CSV" menuitem は「全件一括出力」配下のみ
   const csvItem = page.locator('[role="menu"] [role="menuitem"]:not(.Mui-disabled)', { hasText: /^CSV$/ }).first();
   if (await csvItem.count() === 0) {
+    // disabled の CSV 項目のみ → 0件で出力不能
+    const disabledCsv = await page.locator('[role="menu"] [role="menuitem"].Mui-disabled', { hasText: /^CSV$/ }).count().catch(() => 0);
+    if (disabledCsv > 0) {
+      throw new Error('NO_DATA: CSV 項目が全て disabled (0件)');
+    }
     throw new Error('「全件一括出力 → CSV」項目が見つかりません');
   }
   await csvItem.click({ timeout: 5000 });
@@ -500,8 +542,25 @@ async function exportCurrent(page, ctx, dst) {
 
   // ダウンロード完了待機
   const download = await downloadPromise;
-  await download.saveAs(dst);
-  log(`  ダウンロード保存: ${dst}`);
+  // 失敗確認 (ネットワークエラー / サーバエラー)
+  const failure = await download.failure().catch(() => null);
+  if (failure) {
+    throw new Error(`NO_DATA: ダウンロード失敗 (${failure})`);
+  }
+  // tmp path 取得 — 消失時は NO_DATA 扱い
+  const tmpPath = await download.path().catch(() => null);
+  if (!tmpPath) {
+    throw new Error('NO_DATA: ダウンロード tmp ファイルが存在しない (空/キャンセル)');
+  }
+  try {
+    await download.saveAs(dst);
+    log(`  ダウンロード保存: ${dst}`);
+  } catch (e) {
+    if (/ENOENT/.test(e.message)) {
+      throw new Error(`NO_DATA: saveAs ENOENT (tmp 消失 — 0件ダウンロードの可能性)`);
+    }
+    throw e;
+  }
 }
 
 // ===== メイン =====
