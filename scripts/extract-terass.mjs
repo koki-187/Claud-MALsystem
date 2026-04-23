@@ -26,9 +26,21 @@
 
 import { chromium } from 'playwright';
 import { spawn } from 'child_process';
-import { existsSync, renameSync } from 'fs';
+import { existsSync, renameSync, readFileSync } from 'fs';
 import { resolve, join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+
+// .env 自動ロード (起動方法に依らず ADMIN_SECRET 等を確実に注入)
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const ENV_FILE = join(__dirname, '..', '.env');
+if (existsSync(ENV_FILE)) {
+  for (const raw of readFileSync(ENV_FILE, 'utf8').split(/\r?\n/)) {
+    const m = raw.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.+?)\s*$/);
+    if (m && !process.env[m[1]]) {
+      process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    }
+  }
+}
 
 // ===== 設定 =====
 const CDP_URL = process.env.CDP_URL || 'http://127.0.0.1:9222';
@@ -455,6 +467,29 @@ async function main() {
   if (DRY_RUN) {
     log('DRY-RUN: フラグ解析 OK。ブラウザ接続はスキップ');
     return { success: true, dryRun: true, downloadedFiles: [] };
+  }
+
+  // 旧フォーマット (TERASS_ALL_*, TERASS_<カテゴリ名>_*) を archive へ退避し
+  // converter が今回の都道府県分割 CSV のみを処理するよう保証
+  try {
+    const { readdirSync, mkdirSync } = await import('fs');
+    const archiveDir = join(DOWNLOADS_DIR, '_terass_archive');
+    if (!existsSync(archiveDir)) mkdirSync(archiveDir, { recursive: true });
+    const PREF_NAMES = new Set(PREFECTURES.map(p => p.name));
+    let movedCount = 0;
+    for (const f of readdirSync(DOWNLOADS_DIR)) {
+      if (!/^TERASS_.+\.csv$/i.test(f)) continue;
+      // ファイル名 2 セグメント目が県名でなければ旧フォーマット → 退避
+      const seg = f.replace(/^TERASS_/, '').split('_')[0];
+      if (!PREF_NAMES.has(seg)) {
+        const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+        renameSync(join(DOWNLOADS_DIR, f), join(archiveDir, `${stamp}_${f}`));
+        movedCount++;
+      }
+    }
+    if (movedCount > 0) log(`旧フォーマット CSV ${movedCount} 件を ${archiveDir} へ退避`);
+  } catch (e) {
+    warn(`旧 CSV 退避中にエラー (続行): ${e.message}`);
   }
 
   log(`Chrome CDP に接続中: ${CDP_URL}`);
