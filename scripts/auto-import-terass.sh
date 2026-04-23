@@ -66,7 +66,14 @@ else
     echo "[auto-import] Chrome IndexedDB → CSV 抽出中..."
     echo "[auto-import] スクリプト: $EXTRACT_SCRIPT"
 
-    node "$EXTRACT_SCRIPT" 2>&1 | tee -a "$LOG_FILE"
+    # 都道府県を物件数順で実行 (Task Scheduler 2h タイムアウト内に高優先度県を優先)
+    # 上位 30 県 ≈ 2h 以内。残り 17 県は週次バックフィルで補完。
+    # 30 県: 物件数降順 (aichi 25K → miyazaki 5K)。重複なし。
+    # 残り 17 県 (北海道/東北/北陸/沖縄等) は週次バックフィルで補完。
+    DAILY_PREFS="${TERASS_DAILY_PREFS:-aichi,hyogo,fukuoka,kanagawa,osaka,saitama,tokyo,chiba,kyoto,hiroshima,shizuoka,gifu,okayama,kumamoto,mie,yamaguchi,shiga,ehime,oita,nara,tochigi,ibaraki,gunma,nagano,wakayama,kagoshima,miyagi,niigata,saga,miyazaki}"
+    echo "[auto-import] 対象都道府県: $DAILY_PREFS"
+
+    node "$EXTRACT_SCRIPT" --prefectures="$DAILY_PREFS" 2>&1 | tee -a "$LOG_FILE"
     # PIPESTATUS[0] は node の真の終了コード (tee の終了コードではない)
     extract_code=${PIPESTATUS[0]}
     if [ "$extract_code" -eq 0 ]; then
