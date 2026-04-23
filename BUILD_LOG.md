@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-04-23 22:50 (Desktop) — TERASS 都道府県分割 B テスト成功 + インフラ整備
+
+- **環境**: Desktop
+- **ブランチ**: master (commits b94ace1, 4e56a30)
+- **変更内容**:
+  1. `selectPrefecture` モーダル検出を修正 (MuiModal + 'attached' + "都道府県を選択" ヘッダ一致)
+  2. extract-terass.mjs に .env 自動ロード (ADMIN_SECRET length=48 注入確認)
+  3. 起動時に旧フォーマット `TERASS_ALL_*.csv` を `_terass_archive/<stamp>_*.csv` へ自動退避
+  4. B テスト `--prefectures=tokyo` で 6/6 カテゴリ成功 (各 ~23K 行 = 10K キャップ突破確認)
+- **デプロイ**: 済 (version 76286a75)
+- **並列実装中 (ultrawork)**:
+  - architect: D1+R2+Drive ハイブリッドストレージ設計
+  - executor#1: R2 月次アーカイバ API + Windows Task Scheduler 登録スクリプト
+  - executor#2: delisted 検知サマリー API + 管理 UI 取り込み履歴タブ
+- **次のタスク**: 46 県バックフィル (Task Scheduler 02:00 or 手動一発実行)
+
+---
+
 ## 2026-04-23 (Desktop) — /100test 高インパクト 5項目実装
 
 - **環境**: Desktop
@@ -947,3 +965,25 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
   - converter 全件処理確認: 60,000 行 (6×10,000) → 全 UNIQUE 重複でスキップ (619k 既存と整合・正常動作)
 - **デプロイ**: Cloudflare secret 更新済 (Worker code 変更なし)
 - **次のタスク**: cron 手動トリガで end-to-end 検証 (`schtasks /Run /TN TERASS-PICKS-Auto-Import`)
+
+
+## 2026-04-24 00:00 (Desktop) - ultrawork セッション
+- **環境**: Desktop
+- **ブランチ**: master
+- **変更内容**:
+  - wrangler deploy 成功 (5 cron 統合): daily-cleanup を UTC 15:00 (JST 00:00) に合流、`0 18 * * *` 削除で free tier 上限遵守
+  - extract-terass.mjs SPA 対応修正 3 層 (commit 4987ef7):
+    - `waitUntil: 'commit'` + ERR_ABORTED 無視で SPA nav 競合解消
+    - 検索後 API 完了シグナル待ち (件数テキスト出現、最大 12s)
+    - 出力メニュー hydrate 待機 (`[role="menuitem"]` DOM、最大 5s)
+    - URL `?params=` 消失時の再 goto リトライ
+  - URL ベース都道府県フィルタ (MUI モーダルが 30 県のみ描画のため `prefectureCodes` 直指定)
+  - NO_DATA 検出系: 件数テキスト / 出力ボタン disabled / CSV menuitem disabled / saveAs ENOENT を全て分類
+  - 46 県バックフィル起動中 (bash scripts/run-backfill-46.sh, bg): 進捗 `.backfill-progress`
+  - Task Scheduler 登録完了 (毎日 02:00 SYSTEM 権限)
+  - D1 実サイズ ~286MB (451,367 rows × 635B) — 目標 300MB 既達で追加掃除不要
+- **デプロイ**: Version ID `3e22864b-671a-4cd6-9aea-57c5324f1110`
+- **次のタスク**:
+  - 46 県バックフィル完走待ち (~2-4h 見込み、在庫カテゴリ優先成功)
+  - 成約済カテゴリの CSV menuitem 不検出問題の追加調査 (TERASS 側 disabled の可能性)
+  - delisted モニタの `0件取込+10000スキップ` 誤 ABORT 修正 (監視ロジックに `hadSkips` 条件追加)
