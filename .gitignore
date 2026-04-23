@@ -13,4 +13,10 @@ desktop.ini
 # Drive-synced data archive (do not commit)
 terass-exports/
 
+# バックフィル/クリーンアップ runtime artifacts
+.backfill-progress
+.backfill.log
+.backfill.stdout
+.cleanup.log
+
 .claude/settings.json

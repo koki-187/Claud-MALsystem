@@ -20,12 +20,19 @@ async function safeAll<T>(stmt: D1PreparedStatement): Promise<{ results: T[] }> 
   } catch { return { results: [] }; }
 }
 
-/** D1 実サイズ (MB) — PRAGMA page_count × page_size。失敗時は 0。 */
+/** D1 実サイズ (MB) — PRAGMA page_count × page_size。失敗時は properties 行数 × 635B で概算。 */
 async function getD1SizeMb(db: D1Database): Promise<number> {
   try {
     const pc = await db.prepare('PRAGMA page_count').first<{ page_count: number }>();
     const ps = await db.prepare('PRAGMA page_size').first<{ page_size: number }>();
-    if (pc && ps) return Math.round((pc.page_count * ps.page_size) / 1024 / 1024);
+    if (pc?.page_count && ps?.page_size) {
+      return Math.round((pc.page_count * ps.page_size) / 1024 / 1024);
+    }
+  } catch { /* ignore */ }
+  // フォールバック: properties 1行 ≈ 635 バイト (実測値、cron handler と同係数)
+  try {
+    const cap = await db.prepare('SELECT COUNT(*) AS n FROM properties').first<{ n: number }>();
+    if (cap?.n) return Math.round((cap.n * 635) / 1024 / 1024);
   } catch { /* ignore */ }
   return 0;
 }
@@ -249,11 +256,17 @@ admin.post('/import/session/complete', async (c) => {
   try { categories = JSON.parse(sessionRow.categories_json || '{}'); } catch { categories = {}; }
 
   // インポート 0 件のセッションは自動 abort (TERASS 全失敗を保護)
-  if ((sessionRow.total_imported ?? 0) === 0) {
+  // ただし「処理行数 > 0 だが全件重複スキップ」は健全な状態として通す。
+  // 旧仕様だと毎回バックフィル時に誤 ABORT で delisted 検知が永久停止していた。
+  const totalProcessed = Object.values(categories).reduce<number>(
+    (sum, c) => sum + (typeof c.rowCount === 'number' ? c.rowCount : 0),
+    0
+  );
+  if ((sessionRow.total_imported ?? 0) === 0 && totalProcessed === 0) {
     await db.prepare(`
       UPDATE import_sessions
       SET status='aborted', completed_at=datetime('now'),
-          notes='auto-aborted: zero imports'
+          notes='auto-aborted: zero imports and zero processed'
       WHERE id=?
     `).bind(sessionId).run();
     return c.json({ sessionId, dryRun, aborted: true, reason: 'zero_imports', byCategory: {}, totalMarkedDelisted: 0, ratio: 0 });
@@ -548,10 +561,16 @@ admin.post('/import', async (c) => {
         env.MAL_DB.prepare(`SELECT categories_json, total_imported FROM import_sessions WHERE id=?`).bind(sessionId)
       );
       if (sess) {
-        let cats: Record<string, { rowCount: number; hitLimit: boolean }> = {};
+        let cats: Record<string, { rowCount: number; inserted?: number; skipped?: number; hitLimit: boolean }> = {};
         try { cats = JSON.parse(sess.categories_json || '{}'); } catch { cats = {}; }
         const key = category || `unknown_${importId.slice(0, 6)}`;
-        cats[key] = { rowCount: importedRows, hitLimit: hitExportLimit };
+        // rowCount = 処理した総行数 (重複含む)、inserted = 新規挿入、skipped = 重複スキップ
+        cats[key] = {
+          rowCount: totalRows,
+          inserted: importedRows,
+          skipped: skippedRows,
+          hitLimit: hitExportLimit,
+        };
         const newTotal = (sess.total_imported ?? 0) + importedRows;
         await env.MAL_DB.prepare(`
           UPDATE import_sessions SET categories_json=?, total_imported=? WHERE id=?
