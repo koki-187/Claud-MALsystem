@@ -243,21 +243,32 @@ async function selectPrefecture(page, prefectureName) {
     return;
   }
 
+  // 残存 backdrop / モーダル を必ず閉じてから 都道府県 を開く
+  await page.keyboard.press('Escape').catch(() => {});
+  await page.waitForTimeout(400);
+  await page.keyboard.press('Escape').catch(() => {});
+  await page.waitForTimeout(600);
+
   try {
-    await prefBtn.click({ timeout: 5000 });
+    // force:true で MuiBackdrop の pointer-events 阻害を回避
+    await prefBtn.click({ timeout: 8000, force: true });
     log(`  都道府県モーダルを開く`);
   } catch (e) {
     warn(`  「都道府県」ボタンクリック失敗 — フィルタなしで続行: ${e.message}`);
     return;
   }
 
-  // モーダルが開くのを待つ (dialog role または MUI Modal)
-  const dialog = page.locator('[role="dialog"]').first();
+  // PrefectureModal は role="presentation" — モーダル DOM の "都道府県を選択" ヘッダ出現で開口判定
+  // 注: offsetParent が null になる場合があるため visible 判定は使わず attached + テキスト一致で判定
+  const dialog = page.locator('div.MuiModal-root.css-8ndowl').filter({ hasText: '都道府県を選択' }).first();
   try {
-    await dialog.waitFor({ state: 'visible', timeout: PREF_MODAL_TIMEOUT_MS });
+    await dialog.waitFor({ state: 'attached', timeout: PREF_MODAL_TIMEOUT_MS });
+    // 内容描画の安定化
+    await page.waitForTimeout(700);
   } catch (e) {
     warn(`  都道府県モーダルが開きません (${PREF_MODAL_TIMEOUT_MS}ms) — Escape して続行`);
     await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(500);
     return;
   }
 
@@ -317,7 +328,7 @@ async function selectPrefecture(page, prefectureName) {
   try {
     const confirmBtn = dialog.locator('button:has-text("検索"), button:has-text("決定"), button:has-text("適用")').first();
     if (await confirmBtn.count() > 0) {
-      await confirmBtn.click({ timeout: 3000 });
+      await confirmBtn.click({ timeout: 3000, force: true });
       log('  モーダルを閉じる (確定ボタン)');
     } else {
       log('  確定ボタンが見つかりません — Escape で閉じる');
@@ -328,7 +339,11 @@ async function selectPrefecture(page, prefectureName) {
     await page.keyboard.press('Escape').catch(() => {});
   }
 
-  await page.waitForTimeout(3000);
+  // backdrop が完全に消えるまで待つ (次クリックを阻害しないように)
+  try {
+    await page.locator('div.MuiBackdrop-root.MuiModal-backdrop').first().waitFor({ state: 'hidden', timeout: 5000 });
+  } catch { /* backdrop persists — proceed anyway */ }
+  await page.waitForTimeout(2500);
 }
 
 // ===== カテゴリ切替 (URL ナビゲーション + 在庫/成約済タブ click + 都道府県絞り込み) =====
@@ -361,12 +376,21 @@ async function switchCategory(page, kind, status, prefectureName) {
   }
 
   // 4. 検索ボタンクリック (フィルタ反映)
+  // backdrop 残存に備え force:true。押下対象は左サイドバー検索条件パネル下部の「検索」(submit) ボタン。
   try {
-    const searchBtn = page.locator('button:has-text("検索")').first();
+    const searchBtn = page.locator('button[type="submit"]:has-text("検索")').first();
     if (await searchBtn.count() > 0) {
-      await searchBtn.click({ timeout: 5000 });
+      await searchBtn.click({ timeout: 5000, force: true });
       log('  検索ボタンクリック');
       await page.waitForTimeout(4000);
+    } else {
+      // fallback: 任意の検索ボタン
+      const fb = page.locator('button:has-text("検索")').first();
+      if (await fb.count() > 0) {
+        await fb.click({ timeout: 5000, force: true });
+        log('  検索ボタンクリック (fallback)');
+        await page.waitForTimeout(4000);
+      }
     }
   } catch (e) {
     warn(`  検索ボタンクリック失敗 (続行): ${e.message}`);
