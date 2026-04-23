@@ -933,3 +933,17 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
 ### 次のタスク
 - TERASS PICKS 手動ログイン → 4/24 03:00 cron で完全自動化を最終確認
 
+
+## 2026-04-23 10:08 (Desktop)
+- **環境**: Desktop
+- **ブランチ**: master
+- **変更内容**:
+  - extract-terass.mjs v2 公式「出力」ボタン経由抽出を完成 (6/6 カテゴリ成功確認)
+    - メニュー項目「全件一括出力 → CSV」をクリック
+    - 「実行」ボタンに `noWaitAfter: true` (type="submit" の navigation 待ち回避)
+    - download イベントは `page.on('download')` でリッスン (ctx では発火しない)
+  - ADMIN_SECRET を rotate (旧値紛失) → 新規 48 文字を `.env` に保存・`wrangler secret put` で Cloudflare 反映
+  - `run-auto-import.ps1` に `.env` 自動読み込み + bash 子プロセスへの export を追加
+  - converter 全件処理確認: 60,000 行 (6×10,000) → 全 UNIQUE 重複でスキップ (619k 既存と整合・正常動作)
+- **デプロイ**: Cloudflare secret 更新済 (Worker code 変更なし)
+- **次のタスク**: cron 手動トリガで end-to-end 検証 (`schtasks /Run /TN TERASS-PICKS-Auto-Import`)

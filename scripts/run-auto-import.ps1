@@ -99,9 +99,24 @@ if (Test-CdpReady) {
     Write-Log "CDP 応答 OK (待機 ${waited}s)"
 }
 
+# Step 2.5: .env から ADMIN_SECRET をプロセス環境に注入 (converter の Bearer 認証用)
+$EnvFile = Join-Path $ProjectDir '.env'
+if (Test-Path $EnvFile) {
+    Get-Content $EnvFile | ForEach-Object {
+        if ($_ -match '^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.+?)\s*$') {
+            $name = $matches[1]
+            $value = $matches[2] -replace '^["'']|["'']$', ''
+            [System.Environment]::SetEnvironmentVariable($name, $value, 'Process')
+            Write-Log ".env から $name を注入 (length=$($value.Length))"
+        }
+    }
+} else {
+    Write-Log "WARNING: .env が見つかりません ($EnvFile) — ADMIN_SECRET 未設定の可能性"
+}
+
 # Step 3: auto-import-terass.sh 実行 (fallback ロジックを含む)
 Write-Log 'auto-import-terass.sh を実行中...'
-$bashCmd = "cd '$($ProjectDir -replace '\\', '/')' && ./scripts/auto-import-terass.sh"
+$bashCmd = "cd '$($ProjectDir -replace '\\', '/')' && export `$(grep -v '^#' .env 2>/dev/null | xargs) ; ./scripts/auto-import-terass.sh"
 & $BashExe -lc $bashCmd 2>&1 | ForEach-Object {
     Add-Content -Path $LogFile -Value $_ -Encoding UTF8
 }
