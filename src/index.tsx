@@ -9,7 +9,7 @@ import { aggregateSearch, runScheduledScrape } from './scrapers/aggregator';
 import { PREFECTURES, SITES } from './types';
 import { admin as adminRoutes } from './routes/admin';
 import { processQueue } from './services/image-pipeline';
-import { archiveOldestCold } from './services/archive';
+import { archiveOldestCold, purgeStaleMetadata } from './services/archive';
 import { buildMasters } from './services/master-builder';
 
 const app = new Hono<{ Bindings: Bindings; Variables: AppVariables }>();
@@ -335,7 +335,37 @@ app.get('*', (c) => c.html(getHTML()));
 // Cloudflare Cron Handler
 // =====================
 const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) => {
-  const hour = new Date(event.scheduledTime).getUTCHours();
+  const scheduledDate = new Date(event.scheduledTime);
+  const hour = scheduledDate.getUTCHours();
+
+  // ── Daily cleanup: UTC 18:00 (JST 03:00) ───────────────────────────────────
+  if (hour === 18) {
+    ctx.waitUntil((async () => {
+      try {
+        // 1. Purge stale metadata rows (logs, queue, imports)
+        const purged = await purgeStaleMetadata(env.MAL_DB);
+        console.log('[daily-cleanup] purgeStaleMetadata:', JSON.stringify(purged));
+
+        // 2. Archive cold properties older than 30 days
+        const archived = await archiveOldestCold(env, 5, 2000, 30);
+        console.log(`[daily-cleanup] archiveOldestCold: archived=${archived.archived} deleted=${archived.deleted} keys=${archived.r2Keys.length}`);
+
+        // 3. VACUUM on the 1st of each month (best-effort; may exceed 30s CPU limit)
+        if (scheduledDate.getUTCDate() === 1) {
+          try {
+            await env.MAL_DB.exec('VACUUM');
+            console.log('[daily-cleanup] VACUUM completed');
+          } catch (vacuumErr) {
+            console.warn('[daily-cleanup] VACUUM failed (CPU limit or unsupported):', vacuumErr);
+          }
+        }
+      } catch (e) {
+        console.error('[daily-cleanup] error:', e);
+      }
+    })());
+    // Also run master-builder and capacity check on this hour (fall through below)
+  }
+
   if (hour === 4) {
     // 画像ダウンロードキュー処理 (UTC 4時 = JST 13時) — 大バッチ
     // ADMIN_SECRET 未設定でも動くよう HTTP self-call をやめ直接関数呼び出しに変更
@@ -352,7 +382,7 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
       console.log(`[master-builder] created=${r.created} updated=${r.updated} linked=${r.linked}`);
     }
   }).catch(console.error));
-  // D1容量監視: free tier 5GB (5120MB) の 80% (4096MB) 超で自動アーカイブ
+  // D1容量監視: free tier 500MB の 80% (400MB) 超で自動アーカイブ
   // PRAGMA page_count × page_size で実サイズを取得。失敗時は行数 × 635B の概算にフォールバック。
   ctx.waitUntil((async () => {
     try {
@@ -373,9 +403,9 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
         mb = ((cap?.n ?? 0) * 635) / 1024 / 1024;
         source = 'estimated';
       }
-      if (mb >= 4096) {
-        console.error(`[D1-CAPACITY-ALERT] ${mb.toFixed(0)}MB >= 4096MB (80% of 5GB, source=${source}) — starting auto-archive`);
-        const result = await archiveOldestCold(env, 5, 2000);
+      if (mb >= 400) {
+        console.error(`[D1-CAPACITY-ALERT] ${mb.toFixed(0)}MB >= 400MB (80% of 500MB free tier, source=${source}) — starting auto-archive`);
+        const result = await archiveOldestCold(env, 5, 2000, 30);
         console.log(`[D1-AUTO-ARCHIVE] archived=${result.archived} deleted=${result.deleted} keys=${result.r2Keys.length}`);
       }
     } catch (e) { console.error('[D1-CAPACITY-CHECK-ERROR]', e); }

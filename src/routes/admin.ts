@@ -749,11 +749,13 @@ admin.get('/d1-capacity', async (c) => {
 
 // ─── POST /api/admin/archive-cold ────────────────────────────────────────────
 // status='sold'/'delisted' 行を R2 へ JSONL ダンプし D1 から削除
+// ?age_days=30 で「30日超の行のみ」に絞り込み可 (0=全件, default=0)
 admin.post('/archive-cold', async (c) => {
   const batches   = Number(c.req.query('batches')    ?? '1');
   const batchSize = Number(c.req.query('batch_size') ?? '1000');
+  const ageDays   = Number(c.req.query('age_days')   ?? '0');
   try {
-    const result = await archiveOldestCold(c.env, batches, batchSize);
+    const result = await archiveOldestCold(c.env, batches, batchSize, ageDays);
     return c.json(result);
   } catch (e) {
     console.error('[admin/archive-cold] error:', e);
