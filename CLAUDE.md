@@ -65,6 +65,11 @@ wrangler.toml          # Cloudflare設定 (実リソースID設定済み)
 ./scripts/lint.sh            # リントチェック
 ```
 
+### Windows タスクスケジューラ
+```powershell
+./scripts/register-terass-cron.ps1   # 日次 02:00 自動インポート登録
+```
+
 ### デプロイ（デスクトップ環境のみ）
 ```bash
 # Google Driveパスではnpm installが失敗するため、ローカルコピーを使用

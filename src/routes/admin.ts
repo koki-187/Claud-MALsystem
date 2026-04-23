@@ -889,6 +889,127 @@ admin.post('/master/build-all', async (c) => {
   }
 });
 
+// ─── POST /api/admin/archive/monthly ─────────────────────────────────────────
+// ?year=2026&month=04&dry_run=1
+// 指定月に成約済 (status_flag='closed' 相当: status='sold' かつ contract_date が当該月) の行を
+// R2 に JSONL で書き出し、書き出し後 D1 から DELETE する。
+// properties に contract_date 列が無い場合は sold_at で代替。
+admin.post('/archive/monthly', async (c) => {
+  const yearStr  = c.req.query('year');
+  const monthStr = c.req.query('month');
+  const dryRun   = c.req.query('dry_run') === '1' || c.req.query('dry_run') === 'true';
+
+  if (!yearStr || !monthStr) {
+    return c.json({ error: 'year and month query parameters are required' }, 400);
+  }
+  const year  = parseInt(yearStr,  10);
+  const month = parseInt(monthStr, 10);
+  if (isNaN(year) || year < 2000 || year > 2100) {
+    return c.json({ error: 'year must be a 4-digit number (2000–2100)' }, 400);
+  }
+  if (isNaN(month) || month < 1 || month > 12) {
+    return c.json({ error: 'month must be between 1 and 12' }, 400);
+  }
+
+  // YYYY-MM prefix for date range matching (sold_at LIKE 'YYYY-MM-%')
+  const monthPad  = String(month).padStart(2, '0');
+  const yearMonth = `${year}-${monthPad}`;     // e.g. "2026-04"
+  const r2Key     = `archives/closed/${yearMonth}.jsonl`;
+
+  const db = c.env.MAL_DB;
+
+  // Count rows that match criteria
+  const countRow = await safeFirst<{ cnt: number }>(db.prepare(`
+    SELECT COUNT(*) as cnt FROM properties
+    WHERE status = 'sold'
+      AND sold_at LIKE ?
+  `).bind(`${yearMonth}-%`));
+
+  const count = countRow?.cnt ?? 0;
+  // Rough size estimate: ~635 bytes per row as JSONL (matches D1 capacity estimate)
+  const estimatedBytes = count * 800;
+
+  if (dryRun) {
+    return c.json({
+      dryRun: true,
+      yearMonth,
+      r2Key,
+      rowCount: count,
+      estimatedBytes,
+      estimatedKb: Math.round(estimatedBytes / 1024),
+    });
+  }
+
+  if (count === 0) {
+    return c.json({
+      dryRun: false,
+      yearMonth,
+      r2Key,
+      rowCount: 0,
+      archived: 0,
+      deleted: 0,
+      message: 'No rows matched; nothing written to R2.',
+    });
+  }
+
+  // Fetch all matching rows in pages, build JSONL
+  const enc    = new TextEncoder();
+  const chunks: Uint8Array[] = [];
+  let   offset = 0;
+  const PAGE   = 500;
+  let   fetched = 0;
+
+  while (true) {
+    const rows = await db.prepare(`
+      SELECT * FROM properties
+      WHERE status = 'sold'
+        AND sold_at LIKE ?
+      LIMIT ? OFFSET ?
+    `).bind(`${yearMonth}-%`, PAGE, offset).all<Record<string, unknown>>();
+
+    if (!rows.results?.length) break;
+    for (const row of rows.results) {
+      chunks.push(enc.encode(JSON.stringify(row) + '\n'));
+      fetched++;
+    }
+    offset += PAGE;
+    if (rows.results.length < PAGE) break;
+  }
+
+  // Concatenate all chunks into a single Uint8Array
+  const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0);
+  const body = new Uint8Array(totalLen);
+  let pos = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, pos);
+    pos += chunk.byteLength;
+  }
+
+  // Write to R2
+  await c.env.MAL_STORAGE.put(r2Key, body, {
+    httpMetadata: { contentType: 'application/x-ndjson' },
+  });
+
+  // Delete from D1 (batch by rowid ranges to avoid single large DELETE)
+  const delResult = await db.prepare(`
+    DELETE FROM properties
+    WHERE status = 'sold'
+      AND sold_at LIKE ?
+  `).bind(`${yearMonth}-%`).run();
+
+  const deleted = (delResult.meta?.changes as number | undefined) ?? 0;
+
+  return c.json({
+    dryRun: false,
+    yearMonth,
+    r2Key,
+    rowCount: count,
+    archived: fetched,
+    deleted,
+    writtenBytes: totalLen,
+  });
+});
+
 // ─── GET /api/admin/master/stats ─────────────────────────────────────────────
 admin.get('/master/stats', async (c) => {
   const [masterCount, unlinkedCount, statusBreakdown, siteBreakdown] = await Promise.all([
