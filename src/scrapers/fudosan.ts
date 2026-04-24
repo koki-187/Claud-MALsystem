@@ -1,11 +1,17 @@
 import { BaseScraper } from './base';
 import type { Property, PrefectureCode } from '../types';
 import type { ScrapeContext } from './base';
-import {
-  parseDocument,
-  extractJsonLd,
-  findJsonLdByType,
-} from '../parsers/html-parser';
+import { parseDocument } from '../parsers/html-parser';
+
+/** 都道府県コード → realestate.co.jp の URL 数値コード (1〜47) */
+const REALESTATE_PREF_CODE: Record<string, string> = {
+  '01':'1','02':'2','03':'3','04':'4','05':'5','06':'6','07':'7','08':'8','09':'9',
+  '10':'10','11':'11','12':'12','13':'13','14':'14','15':'15','16':'16','17':'17',
+  '18':'18','19':'19','20':'20','21':'21','22':'22','23':'23','24':'24','25':'25',
+  '26':'26','27':'27','28':'28','29':'29','30':'30','31':'31','32':'32','33':'33',
+  '34':'34','35':'35','36':'36','37':'37','38':'38','39':'39','40':'40','41':'41',
+  '42':'42','43':'43','44':'44','45':'45','46':'46','47':'47',
+};
 
 export class FudosanScraper extends BaseScraper {
   constructor() {
@@ -13,10 +19,14 @@ export class FudosanScraper extends BaseScraper {
   }
 
   async scrapeListings(ctx: ScrapeContext): Promise<Property[]> {
+    const prefCode = REALESTATE_PREF_CODE[ctx.prefecture];
+    if (!prefCode) return [];
     const page = ctx.page ?? 1;
-    // 不動産Japan 物件一覧 URL
-    const url =
-      `https://fudosan.jp/property/?pref=${ctx.prefecture}&page=${page}`;
+
+    // 不動産ジャパン 中古マンション一覧
+    const url = page === 1
+      ? `https://www.realestate.co.jp/mansion/prefecture/${prefCode}/buy/list/`
+      : `https://www.realestate.co.jp/mansion/prefecture/${prefCode}/buy/list/?p=${page}`;
 
     const html = await this.fetchHtml(url);
     if (!html) return [];
@@ -25,141 +35,73 @@ export class FudosanScraper extends BaseScraper {
   }
 
   private parseListings(html: string, prefecture: PrefectureCode): Property[] {
-    // --- Pass 1: JSON-LD structured data (most reliable when present) ---
-    const jsonLdResults = this.parseFromJsonLd(html, prefecture);
-    if (jsonLdResults.length > 0) return jsonLdResults;
+    // Pass 1: __NEXT_DATA__ JSON (Next.js SSR)
+    const nextData = this.parseFromNextData(html, prefecture);
+    if (nextData.length > 0) return nextData;
 
-    // --- Pass 2: CSS selector DOM parsing ---
+    // Pass 2: DOM selector fallback
     return this.parseFromDom(html, prefecture);
   }
 
-  // ── JSON-LD pass ──────────────────────────────────────────────────────────
+  private parseFromNextData(html: string, prefecture: PrefectureCode): Property[] {
+    const m = html.match(/<script id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/);
+    if (!m) return [];
+    try {
+      const json = JSON.parse(m[1]);
+      const items: unknown[] =
+        json?.props?.pageProps?.properties ??
+        json?.props?.pageProps?.mansions ??
+        json?.props?.pageProps?.bukkenList ??
+        json?.props?.pageProps?.list ?? [];
+      if (!Array.isArray(items) || items.length === 0) return [];
 
-  private parseFromJsonLd(html: string, prefecture: PrefectureCode): Property[] {
-    const doc = parseDocument(html);
-    if (!doc) return [];
-
-    const items = extractJsonLd(doc);
-    const nodes = findJsonLdByType(
-      items,
-      'RealEstateListing',
-      'Product',
-      'Apartment',
-      'House',
-      'SingleFamilyResidence',
-    );
-    if (nodes.length === 0) return [];
-
-    const properties: Property[] = [];
-    for (const node of nodes) {
-      try {
-        const partial = this.jsonLdNodeToPartial(node);
-        if (!partial.title || !partial.detailUrl) continue;
-
-        const sitePropertyId = this.idFromUrl(partial.detailUrl);
-        const city = partial.city ?? this.cityFromAddress(partial.address ?? '') ?? '';
-        const fingerprint = this.computeFingerprint({
-          prefecture,
-          city,
-          price: partial.price ?? null,
-          area: partial.area ?? null,
-          rooms: partial.rooms ?? null,
-        });
-
-        properties.push(this.buildBaseProperty({
-          sitePropertyId,
-          title: partial.title,
-          propertyType: 'mansion',
-          prefecture,
-          city,
-          detailUrl: partial.detailUrl ?? null,
-          ...partial,
-          fingerprint,
-        }));
-      } catch { continue; }
-    }
-    return properties;
+      return items.slice(0, 50).flatMap(item => {
+        try { return [this.nextItemToProperty(item as Record<string, unknown>, prefecture)]; }
+        catch { return []; }
+      }).filter((p): p is Property => p !== null);
+    } catch { return []; }
   }
 
-  /** Convert a JSON-LD node into a partial Property. */
-  private jsonLdNodeToPartial(node: Record<string, unknown>): Partial<Property> & { city?: string } {
-    const partial: Partial<Property> & { city?: string } = {};
+  private nextItemToProperty(item: Record<string, unknown>, prefecture: PrefectureCode): Property | null {
+    const title = String(item['name'] ?? item['title'] ?? item['bukkenName'] ?? '').trim();
+    const detailUrl = String(item['url'] ?? item['detailUrl'] ?? item['link'] ?? '');
+    if (!title || !detailUrl) return null;
 
-    if (typeof node['name'] === 'string') partial.title = node['name'].trim();
-    if (typeof node['description'] === 'string') partial.description = node['description'].trim();
-    if (typeof node['url'] === 'string') partial.detailUrl = node['url'];
+    const sitePropertyId = this.idFromUrl(detailUrl);
+    const rawPrice = item['price'] ?? (item['offers'] as Record<string,unknown>)?.['price'];
+    const { price, priceText } = this.extractPrice(String(rawPrice ?? ''));
+    const area = parseFloat(String(item['area'] ?? item['floorSize'] ?? '')) || null;
+    const rooms = String(item['madori'] ?? item['rooms'] ?? '').match(/[1-9][LDKS][DKSR]*/)?.[0] ?? null;
+    const addrRaw = String(item['address'] ?? item['location'] ?? '');
+    const city = addrRaw.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+    const img = String(item['image'] ?? item['thumbnail'] ?? item['mainImg'] ?? '');
+    const thumbnailUrl = img.startsWith('http') ? img : null;
+    const age = this.extractAge(String(item['age'] ?? item['築年数'] ?? ''));
+    const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms });
 
-    // Offer / price
-    const offer = node['offers'];
-    if (offer && typeof offer === 'object' && !Array.isArray(offer)) {
-      const o = offer as Record<string, unknown>;
-      const rawPrice = o['price'];
-      if (rawPrice !== undefined) {
-        const p = parseFloat(String(rawPrice));
-        if (!isNaN(p)) {
-          partial.price = p >= 100000 ? Math.round(p / 10000) : p;
-          partial.priceText = `${partial.price.toLocaleString()}万円`;
-        }
-      }
-    }
-
-    // Floor size
-    const floorSize = node['floorSize'];
-    if (floorSize && typeof floorSize === 'object' && !Array.isArray(floorSize)) {
-      const fs = floorSize as Record<string, unknown>;
-      const val = parseFloat(String(fs['value'] ?? ''));
-      if (!isNaN(val)) partial.area = val;
-    }
-
-    // Geo
-    const geo = node['geo'];
-    if (geo && typeof geo === 'object' && !Array.isArray(geo)) {
-      const g = geo as Record<string, unknown>;
-      if (typeof g['latitude'] === 'number') partial.latitude = g['latitude'];
-      if (typeof g['longitude'] === 'number') partial.longitude = g['longitude'];
-    }
-
-    // Images
-    const img = node['image'];
-    if (typeof img === 'string') {
-      partial.thumbnailUrl = img;
-      partial.images = [img];
-    } else if (Array.isArray(img) && img.length > 0) {
-      partial.thumbnailUrl = String(img[0]);
-      partial.images = img.slice(0, 10).map(String);
-    }
-
-    // Address
-    const addr = node['address'];
-    if (addr && typeof addr === 'object' && !Array.isArray(addr)) {
-      const a = addr as Record<string, unknown>;
-      const streetAddress = typeof a['streetAddress'] === 'string' ? a['streetAddress'] : '';
-      const locality = typeof a['addressLocality'] === 'string' ? a['addressLocality'] : '';
-      partial.address = [locality, streetAddress].filter(Boolean).join(' ') || null;
-      partial.city = locality || undefined;
-    } else if (typeof addr === 'string') {
-      partial.address = addr;
-      partial.city = this.cityFromAddress(addr) ?? undefined;
-    }
-
-    return partial;
+    return this.buildBaseProperty({
+      sitePropertyId, title, propertyType: 'mansion', prefecture, city,
+      detailUrl: detailUrl.startsWith('http') ? detailUrl : `https://www.realestate.co.jp${detailUrl}`,
+      price, priceText, area, rooms, age, thumbnailUrl,
+      images: thumbnailUrl ? [thumbnailUrl] : [], fingerprint,
+    });
   }
-
-  // ── CSS selector DOM pass ─────────────────────────────────────────────────
 
   private parseFromDom(html: string, prefecture: PrefectureCode): Property[] {
     const doc = parseDocument(html);
     if (!doc) return [];
-
     const properties: Property[] = [];
 
-    // 不動産Japan 一覧ページの物件カードセレクタ候補
+    // realestate.co.jp の物件カードセレクタ候補
     const cardSelectors = [
-      '.bukken-item',                // メインカードスタイル
-      '.property-item',              // 新スタイル
-      '[data-bukken-id]',            // data属性ベース
-      '.listing-card',               // リストカード
-      'li.bukken',                   // リストアイテム
+      '.bukken-cassette',
+      '.property-card',
+      '.property-item',
+      '[class*="PropertyCard"]',
+      '[class*="BukkenCard"]',
+      'article[data-id]',
+      '.search-result-item',
+      'li.cassette',
     ];
 
     let cards: Element[] = [];
@@ -167,145 +109,45 @@ export class FudosanScraper extends BaseScraper {
       const found = Array.from(doc.querySelectorAll(sel));
       if (found.length > 0) { cards = found; break; }
     }
-
     if (cards.length === 0) return [];
 
-    for (const card of cards.slice(0, 20)) {
+    for (const card of cards.slice(0, 50)) {
       try {
-        const prop = this.cardToProperty(card, prefecture);
-        if (prop) properties.push(prop);
+        const linkEl = card.querySelector('a[href*="/mansion/"]') ?? card.querySelector('a');
+        const href = linkEl?.getAttribute('href') ?? '';
+        if (!href) continue;
+        const detailUrl = href.startsWith('http') ? href : `https://www.realestate.co.jp${href}`;
+        const titleText = linkEl?.textContent?.trim() ??
+          card.querySelector('h2,h3,[class*="title"],[class*="name"]')?.textContent?.trim() ?? '';
+        if (!titleText) continue;
+
+        const sitePropertyId = this.idFromUrl(detailUrl);
+        const cardText = card.textContent ?? '';
+        const priceRaw = card.querySelector('[class*="price"],[class*="Price"]')?.textContent?.trim() ?? '';
+        const { price, priceText } = this.extractPrice(priceRaw || cardText);
+        const area = this.extractArea(cardText);
+        const rooms = cardText.match(/([1-9][LDKS][DKSR]*)/)?.[1] ?? null;
+        const { station, stationMinutes } = this.extractStation(cardText);
+        const age = this.extractAge(cardText);
+        const city = cardText.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
+        const imgEl = card.querySelector('img');
+        const thumbnailUrl = imgEl?.getAttribute('src') ?? imgEl?.getAttribute('data-src') ?? null;
+        const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms });
+
+        properties.push(this.buildBaseProperty({
+          sitePropertyId, title: titleText, propertyType: 'mansion', prefecture, city, detailUrl,
+          price, priceText, area, rooms, age, station, stationMinutes,
+          thumbnailUrl, images: thumbnailUrl ? [thumbnailUrl] : [], fingerprint,
+        }));
       } catch { continue; }
     }
-
     return properties;
-  }
-
-  private cardToProperty(card: Element, prefecture: PrefectureCode): Property | null {
-    // Title & detail URL
-    const linkEl =
-      card.querySelector('h3 a') ??
-      card.querySelector('h2 a') ??
-      card.querySelector('.bukken-name a') ??
-      card.querySelector('.property-title a') ??
-      card.querySelector('a[href*="/property/"]') ??
-      card.querySelector('a[href*="/bukken/"]') ??
-      card.querySelector('a');
-
-    const href = linkEl?.getAttribute('href') ?? '';
-    const titleText =
-      linkEl?.textContent?.trim() ??
-      card.querySelector('[class*="name"]')?.textContent?.trim() ??
-      card.querySelector('[class*="title"]')?.textContent?.trim() ?? '';
-    if (!titleText) return null;
-
-    const detailUrl = href.startsWith('http') ? href : `https://fudosan.jp${href}`;
-    const sitePropertyId = this.idFromUrl(detailUrl);
-
-    // Price
-    const priceText = this.firstText(card, [
-      '.bukken-price',
-      '.property-price',
-      '[class*="price"]',
-      '[class*="kakaku"]',
-    ]) ?? '';
-    const { price, priceText: priceLabel } = this.extractPrice(priceText);
-
-    // Area
-    const areaText = this.firstText(card, [
-      '.bukken-area',
-      '[class*="area"]',
-      '[class*="menseki"]',
-    ]) ?? '';
-    const area = this.extractArea(areaText);
-
-    // Rooms
-    const roomsText = this.firstText(card, [
-      '.bukken-madori',
-      '[class*="madori"]',
-      '[class*="rooms"]',
-      '[class*="layout"]',
-    ]) ?? '';
-    const rooms = roomsText.match(/(\d[LDKS1-9][DKSR]*)/)?.[1] ?? null;
-
-    // Station
-    const stationText = this.firstText(card, [
-      '.bukken-station',
-      '[class*="station"]',
-      '[class*="route"]',
-      '[class*="traffic"]',
-      '[class*="ensen"]',
-    ]) ?? card.textContent ?? '';
-    const { station, stationMinutes } = this.extractStation(stationText);
-
-    // Age
-    const age = this.extractAge(card.textContent ?? '');
-
-    // City / address
-    const addrText = this.firstText(card, [
-      '.bukken-address',
-      '[class*="address"]',
-      '[class*="location"]',
-      '[class*="chiiki"]',
-    ]) ?? '';
-    const city = addrText.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
-
-    // Images
-    const imgSrcs = Array.from(card.querySelectorAll('img'))
-      .map(img => img.getAttribute('src') ?? '')
-      .filter(s => s.startsWith('http') && !s.match(/(?:logo|icon|sprite|blank|pixel)/i))
-      .slice(0, 10);
-
-    const thumbnailUrl = imgSrcs[0] ?? null;
-
-    const cardText = card.textContent ?? '';
-    const managementFee = this.extractMonthlyFee(cardText, '管理費');
-    const repairFund = this.extractMonthlyFee(cardText, '修繕積立金');
-    const direction = this.extractDirection(cardText);
-    const structure = this.extractStructure(cardText);
-
-    const fingerprint = this.computeFingerprint({ prefecture, city, price, area, rooms });
-
-    return this.buildBaseProperty({
-      sitePropertyId,
-      title: titleText,
-      propertyType: 'mansion',
-      prefecture,
-      city,
-      detailUrl,
-      price,
-      priceText: priceLabel || priceText,
-      area,
-      rooms,
-      age,
-      station,
-      stationMinutes,
-      thumbnailUrl,
-      images: imgSrcs,
-      managementFee,
-      repairFund,
-      direction,
-      structure,
-      fingerprint,
-    });
-  }
-
-  // ── Helpers ───────────────────────────────────────────────────────────────
-
-  private firstText(card: Element, selectors: string[]): string | null {
-    for (const sel of selectors) {
-      const text = card.querySelector(sel)?.textContent?.trim();
-      if (text) return text;
-    }
-    return null;
   }
 
   private idFromUrl(url: string): string {
     const m = url.match(/\/(\d{6,})\//);
     if (m) return m[1];
-    return btoa(encodeURIComponent(url.replace(/https?:\/\/[^/]+/, ''))).slice(0, 24);
-  }
-
-  private cityFromAddress(addr: string): string | null {
-    return addr.match(/([^\s　]+[市区町村])/)?.[1] ?? null;
+    const slug = url.replace(/https?:\/\/[^/]+/, '').replace(/[^a-z0-9]/gi, '-').slice(-24);
+    return slug || btoa(encodeURIComponent(url)).slice(0, 24);
   }
 }

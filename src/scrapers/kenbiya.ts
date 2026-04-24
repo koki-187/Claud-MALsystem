@@ -63,20 +63,22 @@ export class KenbiyaScraper extends BaseScraper {
   }
 
   async scrapeListings(ctx: ScrapeContext): Promise<Property[]> {
-    const page = ctx.page ?? 1;
     const slug = KENBIYA_PREF_SLUGS[ctx.prefecture];
     if (!slug) return [];
-
-    // 健美家 収益物件一覧 URL: /pp0/{region}/{pref}/
-    // Pagination: /pp0/{region}/{pref}/n-{page}/
-    const url = page === 1
-      ? `https://www.kenbiya.com/pp0/${slug}/`
-      : `https://www.kenbiya.com/pp0/${slug}/n-${page}/`;
-
-    const html = await this.fetchHtml(url);
-    if (!html) return [];
-
-    return this.parseListings(html, ctx.prefecture);
+    const maxPages = 3;
+    const all: Property[] = [];
+    for (let page = 1; page <= maxPages; page++) {
+      const url = page === 1
+        ? `https://www.kenbiya.com/pp0/${slug}/`
+        : `https://www.kenbiya.com/pp0/${slug}/n-${page}/`;
+      const html = await this.fetchHtml(url);
+      if (!html) break;
+      const batch = this.parseListings(html, ctx.prefecture);
+      all.push(...batch);
+      if (batch.length < 3) break;
+      if (page < maxPages) await this.sleep(1500);
+    }
+    return all;
   }
 
   private parseListings(html: string, prefecture: PrefectureCode): Property[] {
@@ -100,7 +102,7 @@ export class KenbiyaScraper extends BaseScraper {
     const listItems = Array.from(tableMain.querySelectorAll('li:not(.thead)'));
     if (listItems.length === 0) return [];
 
-    for (const li of listItems.slice(0, 20)) {
+    for (const li of listItems.slice(0, 50)) {
       try {
         const prop = this.liToProperty(li, prefecture);
         if (prop) properties.push(prop);
@@ -109,7 +111,7 @@ export class KenbiyaScraper extends BaseScraper {
 
     // Also parse PR items from .md-propertyListPr
     const prItems = Array.from(doc.querySelectorAll('.md-propertyListPr .item'));
-    for (const item of prItems.slice(0, 5)) {
+    for (const item of prItems.slice(0, 10)) {
       try {
         const prop = this.prItemToProperty(item, prefecture);
         if (prop) properties.push(prop);

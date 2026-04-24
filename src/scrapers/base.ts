@@ -30,7 +30,7 @@ export abstract class BaseScraper {
     this.options = {
       maxRetries: options.maxRetries ?? 3,
       timeoutMs: options.timeoutMs ?? 15000,
-      userAgent: options.userAgent ?? 'Mozilla/5.0 (compatible; MAL-Bot/6.0; +https://mal-system.pages.dev)',
+      userAgent: options.userAgent ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
     };
   }
 
@@ -70,6 +70,10 @@ export abstract class BaseScraper {
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
             'Accept-Encoding': 'gzip, deflate, br',
+            'Cache-Control': 'no-cache',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
             ...options?.headers,
           },
         });

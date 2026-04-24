@@ -31,21 +31,23 @@ export class ChintaiScraper extends BaseScraper {
   }
 
   async scrapeListings(ctx: ScrapeContext): Promise<Property[]> {
-    const page = ctx.page ?? 1;
-    // CHINTAI 賃貸マンション一覧 URL
-    // 形式: /{slug}/area/{prefCode}01/list/ — 都道府県の主要エリア(01)の一覧
     const slug = CHINTAI_PREF_SLUG[ctx.prefecture];
     if (!slug) return [];
-    // Area code = prefecture code (zero-padded to 2 digits) + "101" (main area)
     const areaCode = `${ctx.prefecture}101`;
-    const url = page > 1
-      ? `https://www.chintai.net/${slug}/area/${areaCode}/list/?page=${page}`
-      : `https://www.chintai.net/${slug}/area/${areaCode}/list/`;
-
-    const html = await this.fetchHtml(url);
-    if (!html) return [];
-
-    return this.parseListings(html, ctx.prefecture);
+    const maxPages = 3;
+    const all: Property[] = [];
+    for (let page = 1; page <= maxPages; page++) {
+      const url = page > 1
+        ? `https://www.chintai.net/${slug}/area/${areaCode}/list/?page=${page}`
+        : `https://www.chintai.net/${slug}/area/${areaCode}/list/`;
+      const html = await this.fetchHtml(url);
+      if (!html) break;
+      const batch = this.parseListings(html, ctx.prefecture);
+      all.push(...batch);
+      if (batch.length < 5) break;
+      if (page < maxPages) await this.sleep(1500);
+    }
+    return all;
   }
 
   private parseListings(html: string, prefecture: PrefectureCode): Property[] {
@@ -193,7 +195,7 @@ export class ChintaiScraper extends BaseScraper {
 
     if (cards.length === 0) return [];
 
-    for (const card of cards.slice(0, 20)) {
+    for (const card of cards.slice(0, 50)) {
       try {
         const prop = this.cardToProperty(card, prefecture);
         if (prop) properties.push(prop);

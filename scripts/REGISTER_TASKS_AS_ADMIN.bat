@@ -39,6 +39,28 @@ if %ERRORLEVEL% EQU 0 (
 )
 
 echo.
+
+:: RSS スクレイパー (毎日 04:30)
+schtasks /DELETE /TN "MAL-Rakumachi-RSS" /F >nul 2>&1
+schtasks /CREATE /TN "MAL-Rakumachi-RSS" /TR "C:\Users\reale\Downloads\mal-worker\scripts\run-rakumachi-rss.bat" /SC DAILY /ST 04:30 /RU "%USERDOMAIN%\%USERNAME%" /RL HIGHEST /F
+if %ERRORLEVEL% EQU 0 (
+  echo [OK] 楽待RSSタスク登録完了: 毎日 04:30
+) else (
+  echo [ERROR] 楽待RSSタスク登録失敗
+)
+
+echo.
+
+:: ローカル深掘りスクレイパー (毎日 04:45)
+schtasks /DELETE /TN "MAL-LocalScraper" /F >nul 2>&1
+schtasks /CREATE /TN "MAL-LocalScraper" /TR "C:\Users\reale\Downloads\mal-worker\scripts\run-local-scraper.bat" /SC DAILY /ST 04:45 /RU "%USERDOMAIN%\%USERNAME%" /RL HIGHEST /F
+if %ERRORLEVEL% EQU 0 (
+  echo [OK] ローカルスクレイパータスク登録完了: 毎日 04:45
+) else (
+  echo [ERROR] ローカルスクレイパータスク登録失敗
+)
+
+echo.
 echo ================================================
 echo  登録確認
 echo ================================================

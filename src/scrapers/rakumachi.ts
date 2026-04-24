@@ -11,15 +11,19 @@ export class RakumachiScraper extends BaseScraper {
   }
 
   async scrapeListings(ctx: ScrapeContext): Promise<Property[]> {
-    const page = ctx.page ?? 1;
     const prefNum = parseInt(ctx.prefecture);
-    // 楽待 収益物件一覧 URL
-    const url = `https://www.rakumachi.jp/syuuekibukken/area/?pref_code=${prefNum}&page=${page}&sort=property_created_at&sort_type=desc`;
-
-    const html = await this.fetchHtml(url);
-    if (!html) return [];
-
-    return this.parseListings(html, ctx.prefecture);
+    const maxPages = 3;
+    const all: Property[] = [];
+    for (let page = 1; page <= maxPages; page++) {
+      const url = `https://www.rakumachi.jp/syuuekibukken/area/?pref_code=${prefNum}&page=${page}&sort=property_created_at&sort_type=desc`;
+      const html = await this.fetchHtml(url);
+      if (!html) break;
+      const batch = this.parseListings(html, ctx.prefecture);
+      all.push(...batch);
+      if (batch.length < 5) break;
+      if (page < maxPages) await this.sleep(1500);
+    }
+    return all;
   }
 
   private parseListings(html: string, prefecture: PrefectureCode): Property[] {
@@ -38,7 +42,7 @@ export class RakumachiScraper extends BaseScraper {
     const cards = Array.from(doc.querySelectorAll('.propertyBlock'));
     if (cards.length === 0) return [];
 
-    for (const card of cards.slice(0, 20)) {
+    for (const card of cards.slice(0, 50)) {
       try {
         const prop = this.cardToProperty(card, prefecture);
         if (prop) properties.push(prop);

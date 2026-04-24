@@ -23,13 +23,13 @@ const ALL_SITE_IDS: SiteId[] = [
  * 2–3 prefectures × 9 sites per cron invocation.
  */
 const PREFECTURE_ROTATION: PrefectureCode[][] = [
-  ['13', '27'],       // 0 Mon  東京・大阪
-  ['14', '23'],       // 1 Tue  神奈川・愛知
-  ['11', '12'],       // 2 Wed  埼玉・千葉
-  ['01', '40'],       // 3 Thu  北海道・福岡
-  ['26', '28'],       // 4 Fri  京都・兵庫
-  ['22', '08'],       // 5 Sat  静岡・茨城
-  ['07', '04', '41'], // 6 Sun  福島・宮城・佐賀
+  ['13', '14', '11', '12', '08', '09', '10'], // Mon  関東7県 (東京・神奈川・埼玉・千葉・茨城・栃木・群馬)
+  ['27', '28', '26', '25', '29', '30', '24'], // Tue  近畿7県 (大阪・兵庫・京都・滋賀・奈良・和歌山・三重)
+  ['23', '22', '21', '20', '19', '18', '17'], // Wed  東海・信越・北陸 (愛知・静岡・岐阜・長野・山梨・福井・石川)
+  ['40', '43', '42', '44', '45', '46', '47'], // Thu  九州7県 (福岡・熊本・長崎・大分・宮崎・鹿児島・沖縄)
+  ['34', '33', '32', '31', '38', '37', '36'], // Fri  中国・四国 (広島・岡山・島根・鳥取・愛媛・香川・徳島)
+  ['01', '02', '03', '04', '05', '06', '07'], // Sat  北海道・東北 (北海道・青森・岩手・宮城・秋田・山形・福島)
+  ['16', '15', '41', '35', '39'],             // Sun  残り5県 (富山・新潟・佐賀・山口・高知)
 ];
 
 function createScrapers(): Partial<Record<SiteId, BaseScraper>> {
@@ -171,13 +171,14 @@ export async function runScheduledScrape(env: Bindings): Promise<{
   }
 
   const scrapers = createScrapers();
-  const maxResults = parseInt(env.MAX_RESULTS_PER_SITE ?? '15');
+  const maxResults = parseInt(env.MAX_RESULTS_PER_SITE ?? '50');
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
   let total = 0, newCount = 0, updatedCount = 0, soldCount = 0;
   const errors: string[] = [];
 
   for (const prefecture of targetPrefectures) {
+    if (!prefecture) continue; // Sun rotation の空文字スキップ
     for (const siteId of ALL_SITE_IDS) {
       const scraper = scrapers[siteId];
       if (!scraper) continue;
