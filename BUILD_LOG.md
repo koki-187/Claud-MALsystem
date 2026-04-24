@@ -987,3 +987,22 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
   - 46 県バックフィル完走待ち (~2-4h 見込み、在庫カテゴリ優先成功)
   - 成約済カテゴリの CSV menuitem 不検出問題の追加調査 (TERASS 側 disabled の可能性)
   - delisted モニタの `0件取込+10000スキップ` 誤 ABORT 修正 (監視ロジックに `hadSkips` 条件追加)
+
+
+## 2026-04-25 (Desktop) - 運用化 セッション
+- **環境**: Desktop
+- **ブランチ**: master
+- **変更内容**:
+  - Task Scheduler: SYSTEM → Interactive ユーザーアカウントに変更 (Chrome CDP GUI 対応) (ea48393)
+  - auto-import-terass.sh: 全47県 → 物件数上位30県に絞り込み (2h タイムアウト対応)
+  - run-weekly-backfill.sh: 日次対象外17県を毎週日曜 03:30 に処理
+  - register-weekly-backfill.ps1: 週次 Task Scheduler 登録スクリプト
+  - admin.ts: delisted 誤 ABORT 修正 (重複スキップを健全と認識)
+  - admin.ts: dbSizeEstimatedMb フォールバック実装 → 273MB 正確表示
+- **D1 状態**: 451,393 件 / 273MB (500MB free tier の 54%)
+- **バックフィル**: 18/46 完了後 Chrome CDP 停止 → TERASS 再ログイン後に再開
+- **デプロイ**: Version b0e6d580 (変更なし)
+- **次のタスク**:
+  - バックフィル完走待ち (残 28 県)
+  - 管理者 PS で Task Scheduler を Interactive user で再登録
+  - 週次バックフィル登録 (register-weekly-backfill.ps1)
