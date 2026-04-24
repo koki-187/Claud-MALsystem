@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-04-25 セッション2 (Desktop) — 全スクレイパー最適化 + マルチサイト運用実装
+
+- **環境**: Desktop
+- **ブランチ**: master (commits 8deec40, 653fbe2)
+- **変更内容**:
+  1. **スクレイパー全面最適化** (commit 653fbe2):
+     - `src/scrapers/base.ts`: User-Agent を Chrome 124 実ブラウザUAに変更 (Bot検出対策)
+     - `src/scrapers/aggregator.ts`: 47都道府県ローテーション完全実装 (月〜日 7グループ), MAX_RESULTS 15→50
+     - `src/scrapers/fudosan.ts`: 完全書き直し (realestate.co.jp + `__NEXT_DATA__` パース)
+     - `src/scrapers/smaity.ts`: 完全書き直し (3段階パース: __NEXT_DATA__ → JSON-LD → DOM)
+     - `src/scrapers/homes.ts`, `chintai.ts`, `rakumachi.ts`, `kenbiya.ts`: 最大3ページ取得対応
+  2. **ローカル深掘りスクリプト追加**:
+     - `scripts/scrape-rakumachi-rss.mjs`: 楽待RSS 4フィード → Worker API (毎日 04:30)
+     - `scripts/scrape-sites-local.mjs`: 健美家・不動産Japan ローカル深掘り (毎日 04:45)
+     - `scripts/run-rakumachi-rss.bat` / `run-local-scraper.bat`: Task Scheduler ラッパー
+  3. **REGISTER_TASKS_AS_ADMIN.bat 拡張**: MAL-Rakumachi-RSS / MAL-LocalScraper 追加
+  4. **PowerShell 運用チェックスクリプト修正**: `@()` 強制配列でシングル行 .env の Char バグ解消
+     - ADMIN_SECRET は 48文字で正常 (PowerShell の誤判定だった)
+- **デプロイ**: 未 (ユーザーが `C:\Users\reale\Downloads\mal-worker` で `wrangler deploy` 実行要)
+- **git**: push 済み (653fbe2 → master)
+- **次のタスク**:
+  1. ⚠️ `scripts\_deploy.ps1` を実行してデプロイ (または `wrangler deploy` を手動実行)
+  2. ⚠️ `REGISTER_TASKS_AS_ADMIN.bat` を管理者として実行 (新タスク MAL-Rakumachi-RSS / MAL-LocalScraper 登録)
+  3. 毎日 04:30〜04:45 の実行ログを確認: `C:\Users\reale\Downloads\rakumachi_rss.log`
+
+---
+
 ## 2026-04-25 (Desktop) — Task Scheduler 登録完了・運用開始
 
 - **環境**: Desktop
