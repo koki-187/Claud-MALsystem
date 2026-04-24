@@ -30,11 +30,7 @@ echo.
 :: 週次タスク削除&再登録
 schtasks /DELETE /TN "TERASS-PICKS-Weekly-Backfill" /F >nul 2>&1
 
-schtasks /CREATE /TN "TERASS-PICKS-Weekly-Backfill" ^
-  /TR "\"C:\Program Files\Git\bin\bash.exe\" -lc \"cd /c/Users/reale/Downloads/mal-worker && bash scripts/run-weekly-backfill.sh\"" ^
-  /SC WEEKLY /D SUN /ST 03:30 ^
-  /RU "%USERDOMAIN%\%USERNAME%" ^
-  /RL HIGHEST /F
+schtasks /CREATE /TN "TERASS-PICKS-Weekly-Backfill" /TR "C:\Users\reale\Downloads\mal-worker\scripts\run-weekly-backfill.bat" /SC WEEKLY /D SUN /ST 03:30 /RU "%USERDOMAIN%\%USERNAME%" /RL HIGHEST /F
 
 if %ERRORLEVEL% EQU 0 (
   echo [OK] 週次タスク登録完了: 毎週日曜 03:30

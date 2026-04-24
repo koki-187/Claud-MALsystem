@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-04-25 (Desktop) — Task Scheduler 登録完了・運用開始
+
+- **環境**: Desktop
+- **ブランチ**: master
+- **変更内容**:
+  1. `REGISTER_TASKS_AS_ADMIN.bat` 修正: `/TR` のネスト引用符問題を `run-weekly-backfill.bat` ラッパーで解決
+  2. `scripts/run-weekly-backfill.bat` 新規作成 (週次タスク実行ラッパー)
+  3. Task Scheduler 登録完了:
+     - ✅ `TERASS_AutoImport_Daily` — 毎日 02:00 (Interactive ユーザー, 最高権限)
+     - ✅ `TERASS-PICKS-Weekly-Backfill` — 毎週日曜 03:30 (17県バックフィル)
+- **デプロイ**: 不要 (スクリプト修正のみ)
+- **運用状態**: 全自動化完了 🎉
+  - 日次: 30県 (02:00〜, 2h window) → extract → D1 import
+  - 週次: 17県 (日曜 03:30〜, 4h window) → バックフィル補完
+  - Chrome CDP セッション維持必須 (ログオン状態でスリープ可)
+- **次のタスク**: 初回 02:00 自動実行を確認 → ログ `C:\Users\reale\Downloads\terass_cron.log` で確認
+
+---
+
 ## 2026-04-23 22:50 (Desktop) — TERASS 都道府県分割 B テスト成功 + インフラ整備
 
 - **環境**: Desktop
