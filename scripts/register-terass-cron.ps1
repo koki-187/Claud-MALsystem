@@ -49,10 +49,16 @@ $settings = New-ScheduledTaskSettingsSet `
     -RunOnlyIfNetworkAvailable:$false `
     -MultipleInstances IgnoreNew
 
+# SYSTEM アカウントでは Chrome CDP (GUI) が起動できないため、
+# ログオン中ユーザー ($env:USERNAME) で実行。
+# "ユーザーがログオンしているときのみ実行" → Chrome が画面を使える。
+$currentUser = "$env:USERDOMAIN\$env:USERNAME"
 $principal = New-ScheduledTaskPrincipal `
-    -UserId 'SYSTEM' `
+    -UserId $currentUser `
     -RunLevel Highest `
-    -LogonType ServiceAccount
+    -LogonType Interactive
+
+Write-Status 'INFO' "実行ユーザー: $currentUser (Chrome CDP GUI が必要なため SYSTEM は使用しない)"
 
 # --- 登録 ---
 try {
@@ -65,7 +71,7 @@ try {
         -Force `
         -ErrorAction Stop
 
-    Write-Status 'INFO' "タスク '$TaskName' の登録に成功しました。"
+    Write-Status 'INFO' "タスク '$TaskName' の登録に成功しました (ユーザー: $currentUser)。"
 } catch {
     Write-Status 'ERROR' "タスク登録に失敗しました: $($_.Exception.Message)"
     Write-Status 'ERROR' '管理者権限で再実行してください。'
@@ -78,4 +84,5 @@ Write-Status 'INFO' '--- schtasks /Query 確認 ---'
     Write-Host $_
 }
 
-Write-Status 'INFO' '登録完了。毎日 02:00 に TERASS 自動インポートが実行されます。'
+Write-Status 'INFO' '登録完了。毎日 02:00 (ユーザーログオン中) に TERASS 自動インポートが実行されます。'
+Write-Status 'INFO' '重要: Chrome CDP は GUI セッションが必要です。PC をログオンしたまま (スリープ可) にしてください。'

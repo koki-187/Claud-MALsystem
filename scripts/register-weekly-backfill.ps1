@@ -18,8 +18,12 @@ $settings = New-ScheduledTaskSettingsSet `
   -StartWhenAvailable `
   -RunOnlyIfNetworkAvailable
 
+$currentUser = "$env:USERDOMAIN\$env:USERNAME"
+$principal = New-ScheduledTaskPrincipal -UserId $currentUser -RunLevel Highest -LogonType Interactive
+
 Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
-  -Settings $settings -RunLevel Highest -Force |
+  -Settings $settings -Principal $principal -Force |
   Format-List TaskName, State
 
-Write-Host "週次バックフィル登録完了: 毎週日曜 03:30" -ForegroundColor Green
+Write-Host "週次バックフィル登録完了: 毎週日曜 03:30 (ユーザー: $currentUser)" -ForegroundColor Green
+Write-Host "注意: Chrome CDP (GUI) が必要。ログオン維持が必要です。" -ForegroundColor Yellow
