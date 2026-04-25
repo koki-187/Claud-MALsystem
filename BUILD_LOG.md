@@ -1052,3 +1052,32 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
   - バックフィル完走待ち (残 28 県)
   - 管理者 PS で Task Scheduler を Interactive user で再登録
   - 週次バックフィル登録 (register-weekly-backfill.ps1)
+
+---
+
+## 2026-04-25 セッション3 (Desktop) — スクレイパー全修正・テスト完了
+
+- **環境**: Desktop
+- **ブランチ**: master
+- **変更内容**:
+  1. **楽待スクレイパー完全書き直し** (`scripts/scrape-rakumachi-rss.mjs`):
+     - RSS廃止 (HTTP 404) → 物件一覧ページ直スクレイプに変更
+     - URL: `/syuuekibukken/area/prefecture/dimAll/?pref={N}&limit=50&page={P}`
+     - HTMLパーサー: `<p class="propertyBlock__name">` → title, `<b class="price">` → 価格, `<b class="gross">` → 利回り
+     - **テスト結果**: ✅ 984件 (10県 × 2ページ, DRY-RUN確認)
+  2. **健美家スクレイパー修正** (`scripts/scrape-sites-local.mjs`):
+     - `<a href="/pp[0-9]+/...re_ID.../">` 直接マッチに変更 (旧: `<li>` ラッパー探索で0件)
+     - **テスト結果**: ✅ 3,500件 (14都道府県 × 5ページ × 50件/p, DRY-RUN確認)
+  3. **不動産ジャパンスクレイパー完全書き直し** (`scripts/scrape-sites-local.mjs`):
+     - URL変更: `/mansion/prefecture/{N}/buy/list/` (404) → `/en/forsale/{slug}?prefecture=JP-{num}&page={P}`
+     - 価格: JPY `¥189,800,000` → `18,980万円` 変換追加
+     - `main()` の呼び出しに `slug` パラメータ追加
+     - 北海道 num: '1' → '01' 修正 (JP-1 が 404 だったバグ)
+     - **テスト結果**: ✅ 414件 → 459件見込み (10都道府県 × 3ページ, DRY-RUN確認)
+  4. **デバッグスクリプト削除**: `_debug-rakumachi*.mjs`, `_check-secret*.ps1`
+  5. **Task Scheduler タスク登録済み**: MAL-Rakumachi-RSS (04:30), MAL-LocalScraper (04:45)
+- **デプロイ**: 不要 (ローカルスクリプトのみ変更)
+- **全スクレイパー稼働状況**: ✅ 楽待RSS・健美家・不動産ジャパン すべて正常動作確認
+- **次のタスク**:
+  - ⚠️ `scripts\_deploy.ps1` 実行 (前セッションのWorker改善をデプロイ未了)
+  - 翌朝 04:30〜04:45 の実行ログを確認: `C:\Users\reale\Downloads\mal-worker\logs\`

@@ -98,27 +98,31 @@ async function scrapeKenbiyaPref(code, slug) {
       : `https://www.kenbiya.com/pp0/${slug}/n-${page}/`;
     try {
       const html = await fetchHtml(url);
-      // Extract from table list
-      const liMatches = [...html.matchAll(/<li[^>]*>([\s\S]*?)<\/li>/g)];
+      // Find all property anchor tags: /pp1/, /pp2/, /pp5/, /pp8/ etc.
+      const anchorMatches = [...html.matchAll(/<a\s[^>]*href="(\/pp[0-9]+\/[^"]*re_[a-z0-9]+[^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)];
       let found = 0;
-      for (const liM of liMatches) {
-        const liHtml = liM[1];
-        const linkM = liHtml.match(/href="(\/pp1\/[^"]+)"/);
-        if (!linkM) continue;
-        const detailUrl = `https://www.kenbiya.com${linkM[1]}`;
-        const idM = detailUrl.match(/\/re_([a-z0-9]+)\//i) ?? detailUrl.match(/\/(\d{6,})\//);
+      const seenIds = new Set();
+      for (const aM of anchorMatches) {
+        const path = aM[1];
+        const aHtml = aM[2];
+        const idM = path.match(/re_([a-z0-9]+)/i);
         if (!idM) continue;
         const sitePropertyId = idM[1];
-        const titleM = liHtml.match(/<h3[^>]*>([^<]+)<\/h3>/);
+        if (seenIds.has(sitePropertyId)) continue;
+        seenIds.add(sitePropertyId);
+        const detailUrl = `https://www.kenbiya.com${path}`;
+        const titleM = aHtml.match(/<h3[^>]*>([\s\S]*?)<\/h3>/);
         if (!titleM) continue;
-        const title = titleM[1].trim();
-        const priceRaw = liHtml.match(/([0-9,]+万円|[0-9.]+億[^<]*円)/)?.[0] ?? '';
+        const title = titleM[1].replace(/<[^>]+>/g, '').trim();
+        if (!title) continue;
+        const plainText = aHtml.replace(/<[^>]+>/g, ' ');
+        const priceRaw = plainText.match(/([0-9,]+万円|[0-9.]+億[^<\n]*円)/)?.[0] ?? '';
         const { price, priceText } = extractPrice(priceRaw);
-        const yieldRate = extractYield(liHtml);
-        const area = extractArea(liHtml);
-        const addrM = liHtml.match(/([^\s　]+[市区町村][^<\n]{0,20})/);
-        const city = addrM ? addrM[1].match(/([^\s　]+[市区町村])/)?.[1] ?? '' : '';
-        const { station, stationMinutes } = extractStation(liHtml.replace(/<[^>]+>/g, ' '));
+        const yieldRate = extractYield(plainText);
+        const area = extractArea(plainText);
+        const addrM = plainText.match(/([^\s　]+[市区町村][^\n]{0,20})/);
+        const city = addrM ? (addrM[1].match(/([^\s　]+[市区町村])/)?.[1] ?? '') : '';
+        const { station, stationMinutes } = extractStation(plainText);
         properties.push({
           id: `kenbiya_${sitePropertyId}`,
           siteId: 'kenbiya', sitePropertyId, title,
@@ -141,81 +145,90 @@ async function scrapeKenbiyaPref(code, slug) {
   return properties;
 }
 
-// ─── 不動産ジャパン スクレイパー ───────────────────────────────────
+// ─── 不動産ジャパン (realestate.co.jp/en) スクレイパー ───────────────
+// URL: https://www.realestate.co.jp/en/forsale/{slug}?prefecture=JP-{num}&page={page}
+// Property link: /en/forsale/view/{id}
+// Price: "Price ¥{amount}" in JPY → convert to 万円
 const REALESTATE_PREFS = [
-  { code: '13', num: '13' }, { code: '14', num: '14' },
-  { code: '27', num: '27' }, { code: '23', num: '23' },
-  { code: '11', num: '11' }, { code: '12', num: '12' },
-  { code: '40', num: '40' }, { code: '01', num: '1' },
-  { code: '26', num: '26' }, { code: '28', num: '28' },
+  { code: '13', num: '13', slug: 'tokyo' },
+  { code: '14', num: '14', slug: 'kanagawa' },
+  { code: '27', num: '27', slug: 'osaka' },
+  { code: '23', num: '23', slug: 'aichi' },
+  { code: '11', num: '11', slug: 'saitama' },
+  { code: '12', num: '12', slug: 'chiba' },
+  { code: '40', num: '40', slug: 'fukuoka' },
+  { code: '01', num: '01', slug: 'hokkaido' },
+  { code: '26', num: '26', slug: 'kyoto' },
+  { code: '28', num: '28', slug: 'hyogo' },
 ];
 
-async function scrapeRealestatePref(code, num) {
+function parseRealestateJpyPrice(text) {
+  // "Price ¥189,800,000" → convert JPY to 万円
+  const m = text.match(/[¥￥]([0-9,]+)/);
+  if (!m) return { price: null, priceText: '価格要相談' };
+  const yen = parseInt(m[1].replace(/,/g, ''), 10);
+  const man = Math.round(yen / 10000);
+  const priceText = man >= 10000
+    ? `${(man / 10000).toFixed(2).replace(/\.?0+$/, '')}億円`
+    : `${man.toLocaleString()}万円`;
+  return { price: man, priceText };
+}
+
+async function scrapeRealestatePref(code, num, slug) {
   const properties = [];
-  for (let page = 1; page <= 5; page++) {
-    const url = page === 1
-      ? `https://www.realestate.co.jp/mansion/prefecture/${num}/buy/list/`
-      : `https://www.realestate.co.jp/mansion/prefecture/${num}/buy/list/?p=${page}`;
+  for (let page = 1; page <= 3; page++) {
+    const url = `https://www.realestate.co.jp/en/forsale/${slug}?prefecture=JP-${num}&page=${page}`;
     try {
       const html = await fetchHtml(url);
-
-      // Try __NEXT_DATA__ first
-      const ndM = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]+?)<\/script>/);
       let found = 0;
-      if (ndM) {
-        try {
-          const json = JSON.parse(ndM[1]);
-          const pp = json?.props?.pageProps ?? {};
-          const items = pp?.properties ?? pp?.mansions ?? pp?.bukkenList ?? pp?.list ?? [];
-          for (const item of (Array.isArray(items) ? items : [])) {
-            const title = String(item?.name ?? item?.title ?? '').trim();
-            const urlPath = String(item?.url ?? item?.detailUrl ?? '');
-            if (!title || !urlPath) continue;
-            const detailUrl = urlPath.startsWith('http') ? urlPath : `https://www.realestate.co.jp${urlPath}`;
-            const idM2 = detailUrl.match(/\/(\d{6,})\//);
-            const sitePropertyId = idM2 ? idM2[1] : btoa(urlPath).slice(0, 24);
-            const { price, priceText } = extractPrice(String(item?.price ?? ''));
-            const area = parseFloat(String(item?.area ?? '')) || null;
-            const city = String(item?.address ?? '').match(/([^\s　]+[市区町村])/)?.[1] ?? '';
-            properties.push({
-              id: `fudosan_${sitePropertyId}`,
-              siteId: 'fudosan', sitePropertyId, title,
-              propertyType: 'mansion', status: 'active',
-              prefecture: code, city, address: String(item?.address ?? '') || null,
-              price, priceText, area, detailUrl,
-              thumbnailUrl: String(item?.image ?? '') || null, fingerprint: null,
-            });
-            found++;
-          }
-        } catch { /* fall through to DOM */ }
+      const seen = new Set();
+
+      // Property links: /en/forsale/view/{id}
+      const linkRe = /href="(\/en\/forsale\/view\/(\d+)[^"]*)"/gi;
+      for (const lm of html.matchAll(linkRe)) {
+        const path = lm[1].split('?')[0]; // strip query params
+        const sitePropertyId = lm[2];
+        if (seen.has(sitePropertyId)) continue;
+        seen.add(sitePropertyId);
+
+        const detailUrl = `https://www.realestate.co.jp${path}`;
+
+        // Find context around this link (500 chars before + 800 after)
+        const idx = html.indexOf(lm[0]);
+        const ctx = html.slice(Math.max(0, idx - 500), idx + 800);
+        const plainCtx = ctx.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+        // Title: text in the anchor or nearby heading
+        const titleM = ctx.match(/<(?:h[1-6]|strong|b)[^>]*>([^<]{5,80})<\/(?:h[1-6]|strong|b)>/i);
+        const title = titleM ? titleM[1].trim() : `物件 ${sitePropertyId}`;
+
+        // Price: "Price ¥..." pattern
+        const { price, priceText } = parseRealestateJpyPrice(plainCtx);
+
+        // Area: "NNN m²" or "NNN sqm"
+        const areaM = plainCtx.match(/(\d+(?:\.\d+)?)\s*(?:m²|sqm|sq\.m)/i);
+        const area = areaM ? parseFloat(areaM[1]) : null;
+
+        // City from address context
+        const cityM = plainCtx.match(/([^\s,]+(?:区|市|町|村))/);
+        const city = cityM ? cityM[1] : '';
+
+        properties.push({
+          id: `fudosan_${sitePropertyId}`,
+          siteId: 'fudosan', sitePropertyId, title,
+          propertyType: 'mansion', status: 'active',
+          prefecture: code, city, address: null,
+          price, priceText, area,
+          detailUrl, thumbnailUrl: null, fingerprint: null,
+        });
+        found++;
       }
 
-      // DOM fallback: link-based extraction
-      if (found === 0) {
-        const links = [...html.matchAll(/href="(\/mansion\/[^"]+\/\d+\/[^"]+)"/g)];
-        for (const [, path] of links.slice(0, 30)) {
-          const idM2 = path.match(/\/(\d{6,})\//);
-          if (!idM2) continue;
-          const sitePropertyId = idM2[1];
-          const detailUrl = `https://www.realestate.co.jp${path}`;
-          properties.push({
-            id: `fudosan_${sitePropertyId}`,
-            siteId: 'fudosan', sitePropertyId,
-            title: `不動産ジャパン物件 ${sitePropertyId}`,
-            propertyType: 'mansion', status: 'active',
-            prefecture: code, city: '', address: null,
-            price: null, priceText: '価格要確認', area: null,
-            detailUrl, thumbnailUrl: null, fingerprint: null,
-          });
-          found++;
-        }
-      }
-
-      log(`  realestate ${num} page ${page}: ${found} props`);
+      log(`  realestate ${slug} page ${page}: ${found} props`);
       if (found < 5) break;
       await new Promise(r => setTimeout(r, 3000));
     } catch (e) {
-      log(`  WARNING: realestate ${num} p${page}: ${e.message}`);
+      log(`  WARNING: realestate ${slug} p${page}: ${e.message}`);
       break;
     }
   }
@@ -268,10 +281,10 @@ async function main() {
 
   if (SITE_ARG === 'realestate' || SITE_ARG === 'all') {
     log('=== 不動産ジャパン ===');
-    for (const { code, num } of REALESTATE_PREFS) {
-      log(`▶ 都道府県 ${num}`);
+    for (const { code, num, slug } of REALESTATE_PREFS) {
+      log(`▶ 都道府県 ${num} (${slug})`);
       try {
-        const props = await scrapeRealestatePref(code, num);
+        const props = await scrapeRealestatePref(code, num, slug);
         allProps.push(...props);
         log(`  完了: ${props.length}件`);
       } catch (e) { log(`  ERROR: ${e.message}`); }

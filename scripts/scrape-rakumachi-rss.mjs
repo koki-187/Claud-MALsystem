@@ -27,101 +27,123 @@ const API_BASE = process.env.WORKER_URL ?? 'https://mal-search-system.navigator-
 const ADMIN_SECRET = process.env.ADMIN_SECRET ?? '';
 const IMPORT_URL = `${API_BASE}/api/admin/import`;
 
-const RSS_FEEDS = [
-  'https://www.rakumachi.jp/suikoubutsu/rss/',         // 新着 (全種別)
-  'https://www.rakumachi.jp/suikoubutsu/rss/?type=1',  // マンション
-  'https://www.rakumachi.jp/suikoubutsu/rss/?type=2',  // アパート
-  'https://www.rakumachi.jp/suikoubutsu/rss/?type=4',  // 一棟ビル
+// Top prefectures to scrape (prefNum → prefCode)
+const TARGET_PREFS = [
+  { prefNum: 13, prefCode: '13' }, // 東京
+  { prefNum: 27, prefCode: '27' }, // 大阪
+  { prefNum: 14, prefCode: '14' }, // 神奈川
+  { prefNum: 23, prefCode: '23' }, // 愛知
+  { prefNum: 11, prefCode: '11' }, // 埼玉
+  { prefNum: 28, prefCode: '28' }, // 兵庫
+  { prefNum: 40, prefCode: '40' }, // 福岡
+  { prefNum: 12, prefCode: '12' }, // 千葉
+  { prefNum: 26, prefCode: '26' }, // 京都
+  { prefNum: 34, prefCode: '34' }, // 広島
 ];
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 function log(msg) { console.log(`[${new Date().toISOString()}] [rakumachi-rss] ${msg}`); }
 
-function parseRssItem(item) {
-  const get = (tag) => item.match(new RegExp(`<${tag}[^>]*><!\\[CDATA\\[([\\s\\S]*?)\\]\\]><\\/${tag}>|<${tag}[^>]*>([^<]*)<\\/${tag}>`, 'i'))?.[1] ?? item.match(new RegExp(`<${tag}[^>]*>([^<]*)<\\/${tag}>`, 'i'))?.[1] ?? '';
-
-  const title = get('title').trim();
-  const link = get('link').trim() || item.match(/<link>(https?:[^<]+)<\/link>/i)?.[1]?.trim() ?? '';
-  const description = get('description').trim();
-  const pubDate = get('pubDate').trim();
-
-  if (!title || !link) return null;
-
-  // ID from URL: /syuuekibukken/.../XXXXXX/show.html
-  const idMatch = link.match(/\/(\d{5,})\/show\.html/) ?? link.match(/\/(\d{5,})\//);
-  const sitePropertyId = idMatch ? idMatch[1] : btoa(link).slice(0, 24);
-
-  // Price from title/description
-  const priceMatch = (title + description).match(/([0-9,]+)\s*万円/) ??
-                     (title + description).match(/([0-9]+(?:\.[0-9]+)?)\s*億(?:([0-9,]+)\s*万)?円/);
-  let price = null;
-  let priceText = '価格要相談';
-  if (priceMatch) {
-    if (priceMatch[0].includes('億')) {
-      const oku = parseFloat(priceMatch[1]) * 10000;
-      const man = priceMatch[2] ? parseInt(priceMatch[2].replace(/,/g, '')) : 0;
-      price = oku + man;
-      priceText = priceMatch[0].trim();
-    } else {
-      price = parseInt(priceMatch[1].replace(/,/g, ''));
-      priceText = `${price.toLocaleString()}万円`;
-    }
+function extractPrice(text) {
+  const cleaned = text.replace(/[,\s]/g, '');
+  const oku = cleaned.match(/(\d+(?:\.\d+)?)億(?:(\d+)万)?円/);
+  if (oku) {
+    const price = Math.round(parseFloat(oku[1]) * 10000) + (oku[2] ? parseInt(oku[2]) : 0);
+    return { price, priceText: text.trim() };
   }
-
-  // Prefecture from description
-  const prefMap = {'東京':13,'神奈川':14,'大阪':27,'愛知':23,'福岡':40,'北海道':1,'京都':26,'兵庫':28,'埼玉':11,'千葉':12,'静岡':22,'広島':34,'宮城':4,'新潟':15,'長野':20,'岡山':33,'栃木':9,'群馬':10,'茨城':8,'岐阜':21,'三重':24,'滋賀':25,'奈良':29,'和歌山':30,'青森':2,'岩手':3,'秋田':5,'山形':6,'福島':7,'富山':16,'石川':17,'福井':18,'山梨':19,'鳥取':31,'島根':32,'山口':35,'徳島':36,'香川':37,'愛媛':38,'高知':39,'佐賀':41,'長崎':42,'熊本':43,'大分':44,'宮崎':45,'鹿児島':46,'沖縄':47};
-  let prefecture = '13'; // fallback: Tokyo
-  for (const [name, code] of Object.entries(prefMap)) {
-    if ((title + description + link).includes(name)) {
-      prefecture = String(code).padStart(2, '0');
-      break;
-    }
-  }
-
-  // Yield from title: "表面利回りX.X%"
-  const yieldMatch = (title + description).match(/(?:表面)?利回り\s*([0-9]+(?:\.[0-9]+)?)\s*[%％]/);
-  const yieldRate = yieldMatch ? parseFloat(yieldMatch[1]) : null;
-
-  // City
-  const cityMatch = (title + description).match(/([^\s　]+[市区町村])/);
-  const city = cityMatch ? cityMatch[1] : '';
-
-  return {
-    id: `rakumachi_${sitePropertyId}`,
-    siteId: 'rakumachi',
-    sitePropertyId,
-    title,
-    propertyType: 'investment',
-    status: 'active',
-    prefecture,
-    city,
-    address: null,
-    price,
-    priceText,
-    area: null,
-    buildingArea: null,
-    landArea: null,
-    rooms: null,
-    age: null,
-    floor: null,
-    totalFloors: null,
-    station: null,
-    stationMinutes: null,
-    thumbnailUrl: null,
-    detailUrl: link,
-    description: description.slice(0, 500) || null,
-    yieldRate,
-    latitude: null,
-    longitude: null,
-    fingerprint: null,
-    listedAt: pubDate ? new Date(pubDate).toISOString() : null,
-  };
+  const man = cleaned.match(/(\d+(?:\.\d+)?)万円/);
+  if (man) return { price: Math.round(parseFloat(man[1])), priceText: text.trim() };
+  return { price: null, priceText: '価格要相談' };
 }
 
-async function fetchRss(url) {
+function extractYield(text) {
+  const m = text.match(/([0-9]+(?:\.[0-9]+)?)\s*[%％]/);
+  if (m) { const v = parseFloat(m[1]); return (v > 0 && v < 50) ? v : null; }
+  return null;
+}
+
+function parseListingHtml(html, prefCode) {
+  // Structure: <p class="propertyBlock__name">TITLE</p> followed within ~2000 chars
+  //            by <a href="/syuuekibukken/.../ID/show.html" ...>...price/yield...</a>
+  const properties = [];
+  const seen = new Set();
+  const nameRe = /<p class="propertyBlock__name">([^<]+)<\/p>/g;
+
+  for (const nm of html.matchAll(nameRe)) {
+    const title = nm[1].trim();
+    if (!title) continue;
+
+    // Look ahead up to 2000 chars for the nearby show.html anchor
+    const afterTitle = html.indexOf(nm[0]) + nm[0].length;
+    const chunk = html.slice(afterTitle, afterTitle + 2500);
+
+    const urlM = chunk.match(/href="(\/syuuekibukken\/[^"]+\/(\d+)\/show\.html)"/);
+    if (!urlM) continue;
+    const path = urlM[1];
+    const sitePropertyId = urlM[2];
+    if (seen.has(sitePropertyId)) continue;
+    seen.add(sitePropertyId);
+
+    const detailUrl = `https://www.rakumachi.jp${path}`;
+
+    // Get content of that <a> tag for price/yield/address
+    const aStart = chunk.indexOf(`href="${path}"`);
+    const aEnd = chunk.indexOf('</a>', aStart);
+    const aText = aEnd > aStart
+      ? chunk.slice(aStart, aEnd).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')
+      : chunk.slice(aStart, aStart + 500).replace(/<[^>]+>/g, ' ');
+
+    // Price: look for <b class="price">VALUE</b> or fallback plain text
+    const bPriceM = chunk.slice(aStart, aEnd > 0 ? aEnd : aStart + 800)
+      .match(/<b class="price">([^<]+)<\/b>/);
+    const priceRaw = bPriceM ? bPriceM[1] : (aText.match(/[0-9,]+万円|[0-9.]+億[^万\n]*円/)?.[0] ?? '');
+    const { price, priceText } = extractPrice(priceRaw);
+
+    // Yield: <b class="gross">VALUE</b>
+    const bYieldM = chunk.slice(aStart, aEnd > 0 ? aEnd : aStart + 800)
+      .match(/<b class="gross">([^<]+)<\/b>/);
+    const yieldRate = bYieldM ? extractYield(bYieldM[1]) : extractYield(aText);
+
+    // Address: <span class="propertyBlock__address">VALUE</span>
+    const addrM = chunk.slice(aStart, aEnd > 0 ? aEnd : aStart + 1000)
+      .match(/<span class="propertyBlock__address">([^<]+)<\/span>/);
+    const address = addrM ? addrM[1].trim() : null;
+    const cityM = (address ?? aText).match(/([^\s　]+[市区町村])/);
+    const city = cityM ? cityM[1] : '';
+
+    // Station: <span class="propertyBlock__access">VALUE</span>
+    const stM = chunk.slice(aStart, aEnd > 0 ? aEnd : aStart + 1000)
+      .match(/<span class="propertyBlock__access">([^<]+)<\/span>/);
+    const stText = stM ? stM[1] : '';
+    const stWalkM = stText.match(/(\S+駅?)\s*(?:徒歩)?(\d+)分/);
+    const station = stWalkM ? stWalkM[1].replace(/駅$/, '') : null;
+    const stationMinutes = stWalkM ? parseInt(stWalkM[2]) : null;
+
+    properties.push({
+      id: `rakumachi_${sitePropertyId}`,
+      siteId: 'rakumachi', sitePropertyId, title,
+      propertyType: 'investment', status: 'active',
+      prefecture: prefCode, city, address,
+      price, priceText,
+      area: null, buildingArea: null, landArea: null,
+      rooms: null, age: null, floor: null, totalFloors: null,
+      station, stationMinutes,
+      thumbnailUrl: null, detailUrl,
+      description: null, yieldRate,
+      latitude: null, longitude: null, fingerprint: null, listedAt: null,
+    });
+  }
+  return properties;
+}
+
+async function fetchListingPage(url) {
   const resp = await fetch(url, {
-    headers: { 'User-Agent': UA, 'Accept': 'application/rss+xml,application/xml,text/xml' },
+    headers: {
+      'User-Agent': UA,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'ja,en-US;q=0.7,en;q=0.3',
+    },
     signal: AbortSignal.timeout(15000),
   });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${url}`);
@@ -165,27 +187,33 @@ async function importToWorker(properties) {
 }
 
 async function main() {
-  log('楽待 RSS スクレイプ開始');
+  log('楽待 物件一覧スクレイプ開始 (10県 × 2ページ)');
   const seen = new Set();
   const allProperties = [];
 
-  for (const feedUrl of RSS_FEEDS) {
-    try {
-      log(`RSS取得: ${feedUrl}`);
-      const xml = await fetchRss(feedUrl);
-      const items = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map(m => m[1]);
-      log(`  ${items.length} items in feed`);
-
-      for (const item of items) {
-        const prop = parseRssItem(item);
-        if (!prop || seen.has(prop.sitePropertyId)) continue;
-        seen.add(prop.sitePropertyId);
-        allProperties.push(prop);
+  for (const { prefNum, prefCode } of TARGET_PREFS) {
+    for (let page = 1; page <= 2; page++) {
+      const url = `https://www.rakumachi.jp/syuuekibukken/area/prefecture/dimAll/?pref=${prefNum}&limit=50&page=${page}`;
+      try {
+        log(`取得: pref=${prefNum} page=${page}`);
+        const html = await fetchListingPage(url);
+        const props = parseListingHtml(html, prefCode);
+        let added = 0;
+        for (const p of props) {
+          if (seen.has(p.sitePropertyId)) continue;
+          seen.add(p.sitePropertyId);
+          allProperties.push(p);
+          added++;
+        }
+        log(`  → ${props.length}件取得, ${added}件追加 (累計: ${allProperties.length}件)`);
+        if (props.length < 5) break;
+        await new Promise(r => setTimeout(r, 2000));
+      } catch (e) {
+        log(`WARNING: pref=${prefNum} page=${page} → ${e.message}`);
+        break;
       }
-      await new Promise(r => setTimeout(r, 2000));
-    } catch (e) {
-      log(`WARNING: ${feedUrl} → ${e.message}`);
     }
+    await new Promise(r => setTimeout(r, 1500));
   }
 
   log(`合計 ${allProperties.length} 件 (重複除去後)`);
