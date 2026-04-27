@@ -5,6 +5,42 @@
 
 ---
 
+## 2026-04-27 (Desktop) — 3モード検索UI全面再構築 + 不動産ポータルUXリサーチ反映
+
+- **環境**: Desktop
+- **ブランチ**: master (commits 64b0e1c, 6bfd034, 5b8bf66)
+- **変更内容**:
+  1. **ローカルスクレーパー修正** (commit 64b0e1c):
+     - `scrape-sites-local.mjs`: `scrapeRealestatePref` の slug パラメータ欠落バグ修正
+     - 北海道 `num: '1'` → `'01'` (JP-1 404エラー修正)
+     - 3スクレーパー dry-run 確認: 楽待984件・健美家3500件・不動産Japan414件
+  2. **/100test 改善 11件実装** (commit 6bfd034):
+     - サイト数動的生成・export-bar 条件表示・pagination range・aggregateSearch フォールバック改善
+     - 価格要相談スタイル・全サイト警告・ウェルカム初期unchecked・モバイルリストview修正
+     - stationMinutes NULL バグ修正 (db/queries.ts)・SiteId 型分離 (ActiveSiteId / DeprecatedSiteId)
+  3. **不動産ポータルUXリサーチ** (SUUMO/HOME'S/健美家/楽待 横断分析):
+     - 3モード分類・間取り複数選択・詳細フィルタアコーディオン・ソート位置等を調査・整理
+  4. **3モード検索UI全面再構築** (commit 5b8bf66):
+     - 購入/賃貸/投資 タブ: モード切替で対象サイト自動選択
+     - クイックプリセットチップ: 各モード4種 (新築/駅5分/3000万/利回り8%+等)
+     - 間取り複数選択 ドロップダウン (購入・賃貸 独立)
+     - 投資専用: 建物種別チェックボックス (一棟マンション/アパート/区分マンション等)
+     - 並び順を結果バーへ移動 (SUUMO/HOME'S準拠)
+     - サイト選択をアコーディオン折り畳みへ変更
+     - 価格上下限バリデーション + クリア後スナックバー undo機能
+- **デプロイ**: ⚠️ 未 — `scripts\_deploy.ps1` または `wrangler deploy` 実行要
+  - HTTP 400 "multipart/form-data required" エラーは旧バージョンのデプロイ起因
+  - デプロイ後にローカルスクレーパーを再実行してデータ収集 (dry-runは確認済み)
+- **git**: push 済み (5b8bf66 → master)
+- **次のタスク**:
+  1. ⚠️ **必須**: `scripts\_deploy.ps1` 実行 → wrangler deploy
+  2. ⚠️ **必須**: デプロイ後にローカルスクレーパー再実行 (実データ収集)
+     - `node scripts/scrape-sites-local.mjs --site=all`
+     - `node scripts/scrape-rakumachi-rss.mjs`
+  3. 検索UIの動作確認 (3モード切替・プリセット・間取り複数選択)
+
+---
+
 ## 2026-04-25 セッション2 (Desktop) — 全スクレイパー最適化 + マルチサイト運用実装
 
 - **環境**: Desktop
