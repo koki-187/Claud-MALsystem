@@ -1195,6 +1195,138 @@ img { max-width: 100%; }
   cursor: pointer;
   border: none;
 }
+
+/* ── Search Mode Tabs ── */
+.mode-tabs {
+  display: flex; gap: 0; margin-bottom: 20px;
+  background: var(--c-bg2); border-radius: 12px; padding: 4px;
+  border: 1px solid var(--c-border);
+}
+.mode-tab {
+  flex: 1; padding: 10px 0; border-radius: 9px;
+  font-size: 14px; font-weight: 700; color: var(--c-text3);
+  background: none; border: none; cursor: pointer;
+  transition: all var(--transition);
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.mode-tab.active {
+  background: var(--c-surface); color: var(--c-primary);
+  box-shadow: var(--shadow-sm); border: 1px solid var(--c-border);
+}
+.mode-tab:hover:not(.active) { color: var(--c-text2); }
+
+/* ── Preset Quick Chips ── */
+.preset-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.preset-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 13px; border-radius: 20px;
+  background: var(--c-bg2); border: 1.5px solid var(--c-border);
+  font-size: 12px; font-weight: 700; color: var(--c-text2);
+  cursor: pointer; transition: all var(--transition); white-space: nowrap;
+}
+.preset-chip:hover { border-color: var(--c-primary); color: var(--c-primary); background: rgba(37,99,235,.07); }
+.preset-chip.active { background: var(--c-primary); border-color: var(--c-primary); color: #fff; }
+
+/* ── Buy Type Chips ── */
+.type-chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.type-chip-lbl { display: inline-flex; align-items: center; }
+.type-chip-lbl input[type="radio"] { display: none; }
+.type-chip-lbl span {
+  padding: 6px 14px; border-radius: 20px;
+  border: 1.5px solid var(--c-border); background: var(--c-bg);
+  font-size: 13px; font-weight: 600; color: var(--c-text2);
+  cursor: pointer; transition: all var(--transition); user-select: none;
+}
+.type-chip-lbl input:checked + span { background: var(--c-primary); border-color: var(--c-primary); color: #fff; }
+.type-chip-lbl span:hover { border-color: var(--c-primary); color: var(--c-primary); }
+
+/* ── Multi Rooms Dropdown ── */
+.rooms-wrap { position: relative; }
+.rooms-btn {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  cursor: pointer; text-align: left;
+}
+.rooms-chevron { font-size: 11px; color: var(--c-text4); transition: transform var(--transition); }
+.rooms-popup {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--c-surface); border: 1.5px solid var(--c-border);
+  border-radius: var(--radius-sm); z-index: 50; padding: 10px;
+  box-shadow: var(--shadow-md);
+  display: grid; grid-template-columns: repeat(3,1fr); gap: 4px;
+}
+.rooms-popup label {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; font-weight: 600; color: var(--c-text2);
+  transition: background var(--transition);
+}
+.rooms-popup label:hover { background: var(--c-bg2); }
+.rooms-popup input[type="checkbox"] { width: 14px; height: 14px; cursor: pointer; accent-color: var(--c-primary); }
+
+/* ── Invest Type Chips ── */
+.invest-type-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+.invest-type-lbl { display: inline-flex; align-items: center; }
+.invest-type-lbl input { display: none; }
+.invest-type-lbl span {
+  padding: 6px 14px; border-radius: 20px;
+  border: 1.5px solid var(--c-border); background: var(--c-bg);
+  font-size: 13px; font-weight: 600; color: var(--c-text2);
+  cursor: pointer; transition: all var(--transition); user-select: none;
+}
+.invest-type-lbl input:checked + span { background: #dc2626; border-color: #dc2626; color: #fff; }
+.invest-type-lbl span:hover { border-color: #dc2626; color: #dc2626; }
+
+/* ── Sites Accordion ── */
+.sites-accordion { margin-top: 16px; }
+.sites-accordion summary {
+  list-style: none; cursor: pointer;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-radius: var(--radius-sm);
+  background: var(--c-bg2); border: 1px solid var(--c-border);
+  font-size: 13px; font-weight: 700; color: var(--c-text2);
+  user-select: none; transition: all var(--transition);
+}
+.sites-accordion summary:hover { border-color: var(--c-primary); color: var(--c-primary); }
+.sites-accordion summary::-webkit-details-marker { display: none; }
+.sites-accordion[open] summary {
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border-bottom-color: transparent; background: var(--c-surface);
+}
+.sites-accordion-body {
+  padding: 12px 14px; border: 1px solid var(--c-border);
+  border-top: none; border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+}
+.accordion-arrow { margin-left: auto; font-size: 11px; color: var(--c-text4); transition: transform var(--transition); }
+details[open] .accordion-arrow { transform: rotate(180deg); }
+
+/* ── Sort in Results Bar ── */
+.results-sort { display: flex; align-items: center; gap: 6px; }
+.results-sort-lbl { font-size: 12px; font-weight: 700; color: var(--c-text3); white-space: nowrap; }
+.results-sort select {
+  padding: 5px 10px; border-radius: 8px;
+  border: 1.5px solid var(--c-border); background: var(--c-surface);
+  font: inherit; font-size: 12px; color: var(--c-text);
+}
+
+/* ── Snackbar ── */
+.snackbar {
+  position: fixed; bottom: 24px; left: 50%;
+  transform: translateX(-50%) translateY(120px);
+  background: var(--c-text); color: var(--c-bg);
+  padding: 12px 20px; border-radius: 10px;
+  font-size: 13px; font-weight: 700;
+  display: flex; align-items: center; gap: 12px;
+  box-shadow: var(--shadow-lg); z-index: 9998;
+  transition: transform .28s cubic-bezier(.34,1.56,.64,1);
+  white-space: nowrap; pointer-events: none;
+}
+.snackbar.visible { transform: translateX(-50%) translateY(0); pointer-events: auto; }
+.snackbar-undo { color: #60a5fa; cursor: pointer; font-weight: 800; padding: 0 4px; }
+
+/* ── Field Error ── */
+.field-input.has-error { border-color: var(--c-danger) !important; }
+.field-error { font-size: 11px; color: var(--c-danger); margin-top: 3px; font-weight: 600; }
+
   </style>
 </head>
 <body class="page-wrap">
@@ -1273,7 +1405,37 @@ img { max-width: 100%; }
   <!-- Search Panel -->
   <div class="search-panel">
 
-    <!-- Row 1: query / prefecture / type / status -->
+    <!-- Mode Tabs: 購入 / 賃貸 / 投資 -->
+    <div class="mode-tabs">
+      <button class="mode-tab active" id="modeTabBuy"    onclick="setSearchMode('buy')">🏠 購入</button>
+      <button class="mode-tab"        id="modeTabRent"   onclick="setSearchMode('rent')">🔑 賃貸</button>
+      <button class="mode-tab"        id="modeTabInvest" onclick="setSearchMode('invest')">💰 投資</button>
+    </div>
+
+    <!-- Preset Chips (mode-specific) -->
+    <div id="presetBuy" class="preset-row">
+      <span style="font-size:12px;color:var(--c-text3);align-self:center;white-space:nowrap">クイック:</span>
+      <button class="preset-chip" id="pc_buy_new"      onclick="applyPreset('buy_new',this)">🏗 新築</button>
+      <button class="preset-chip" id="pc_buy_st5"      onclick="applyPreset('buy_st5',this)">🚆 駅5分</button>
+      <button class="preset-chip" id="pc_buy_3000"     onclick="applyPreset('buy_3000',this)">💴 3000万以下</button>
+      <button class="preset-chip" id="pc_buy_wide"     onclick="applyPreset('buy_wide',this)">📐 70m²以上</button>
+    </div>
+    <div id="presetRent" class="preset-row hidden">
+      <span style="font-size:12px;color:var(--c-text3);align-self:center;white-space:nowrap">クイック:</span>
+      <button class="preset-chip" id="pc_rent_st5"     onclick="applyPreset('rent_st5',this)">🚆 駅5分</button>
+      <button class="preset-chip" id="pc_rent_new"     onclick="applyPreset('rent_new',this)">✨ 築5年以内</button>
+      <button class="preset-chip" id="pc_rent_1ldk"    onclick="applyPreset('rent_1ldk',this)">🛏 1LDK</button>
+      <button class="preset-chip" id="pc_rent_2ldk"    onclick="applyPreset('rent_2ldk',this)">🛏 2LDK</button>
+    </div>
+    <div id="presetInvest" class="preset-row hidden">
+      <span style="font-size:12px;color:var(--c-text3);align-self:center;white-space:nowrap">クイック:</span>
+      <button class="preset-chip" id="pc_inv_y8"       onclick="applyPreset('inv_y8',this)">📈 利回り8%+</button>
+      <button class="preset-chip" id="pc_inv_apt"      onclick="applyPreset('inv_apt',this)">🏗 一棟アパート</button>
+      <button class="preset-chip" id="pc_inv_munit"    onclick="applyPreset('inv_munit',this)">🏬 区分マンション</button>
+      <button class="preset-chip" id="pc_inv_y10"      onclick="applyPreset('inv_y10',this)">🔥 利回り10%+</button>
+    </div>
+
+    <!-- Row 1: フリーワード + 都道府県 -->
     <div class="search-grid">
       <div>
         <div class="field-label">フリーワード</div>
@@ -1293,19 +1455,6 @@ img { max-width: 100%; }
         </select>
       </div>
       <div>
-        <div class="field-label">物件種別</div>
-        <select id="propertyType" class="field-input">
-          <option value="">すべて</option>
-          <option value="mansion">マンション（分譲）</option>
-          <option value="kodate">一戸建て</option>
-          <option value="tochi">土地</option>
-          <option value="chintai_mansion">賃貸マンション</option>
-          <option value="chintai_ikkodate">賃貸一戸建て</option>
-          <option value="jimusho">事務所・店舗</option>
-          <option value="investment">投資用物件</option>
-        </select>
-      </div>
-      <div>
         <div class="field-label">ステータス</div>
         <select id="status" class="field-input">
           <option value="active">販売中</option>
@@ -1313,116 +1462,230 @@ img { max-width: 100%; }
           <option value="sold">売却済のみ</option>
         </select>
       </div>
-    </div>
-
-    <!-- Row 2: price / area / rooms+station+age -->
-    <div class="search-grid2">
-      <div>
-        <div class="field-label">価格 <span id="priceLabel" style="font-weight:400;color:var(--c-text3)">指定なし</span></div>
-        <div class="range-row">
-          <input type="number" id="priceMin" placeholder="下限(万円)" class="field-input" min="0" oninput="updatePriceLabel()">
-          <span class="range-sep">〜</span>
-          <input type="number" id="priceMax" placeholder="上限(万円)" class="field-input" min="0" oninput="updatePriceLabel()">
-        </div>
-      </div>
-      <div>
-        <div class="field-label">面積 <span id="areaLabel" style="font-weight:400;color:var(--c-text3)">指定なし</span></div>
-        <div class="range-row">
-          <input type="number" id="areaMin" placeholder="下限(m²)" class="field-input" min="0" oninput="updateAreaLabel()">
-          <span class="range-sep">〜</span>
-          <input type="number" id="areaMax" placeholder="上限(m²)" class="field-input" min="0" oninput="updateAreaLabel()">
-        </div>
-      </div>
-      <div>
-        <div class="field-label">利回り下限（投資）<span class="term-help" tabindex="0" data-tip="利回り = (年間家賃収入 ÷ 物件価格) × 100。投資物件の収益性指標。例: 1億の物件で年700万円家賃 → 7.0%。">?</span></div>
-        <div class="range-row">
-          <input type="number" id="yieldMin" placeholder="例: 7.5" class="field-input" min="0" step="0.1">
-          <span class="range-sep">%以上</span>
-        </div>
+      <div style="display:flex;align-items:flex-end">
+        <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--c-text2);cursor:pointer;padding-bottom:9px">
+          <input type="checkbox" id="hideDuplicates" onchange="doSearch()" style="width:15px;height:15px;cursor:pointer;accent-color:var(--c-primary)">
+          重複非表示
+        </label>
       </div>
     </div>
 
-    <!-- Row 3: rooms / station / age -->
-    <div class="search-grid3">
-      <div>
-        <div class="field-label">間取り</div>
-        <select id="rooms" class="field-input">
-          <option value="">すべて</option>
-          <option value="1R">1R</option>
-          <option value="1K">1K</option>
-          <option value="1DK">1DK</option>
-          <option value="1LDK">1LDK</option>
-          <option value="2K">2K</option>
-          <option value="2DK">2DK</option>
-          <option value="2LDK">2LDK</option>
-          <option value="3LDK">3LDK</option>
-          <option value="4LDK">4LDK</option>
-          <option value="5LDK以上">5LDK以上</option>
-        </select>
+    <!-- 購入フィールド -->
+    <div id="buyFields" style="margin-top:14px">
+      <div style="margin-bottom:12px">
+        <div class="field-label">物件種別</div>
+        <div class="type-chip-row">
+          <label class="type-chip-lbl"><input type="radio" name="buyType" value="" checked><span>すべて</span></label>
+          <label class="type-chip-lbl"><input type="radio" name="buyType" value="mansion"><span>🏢 マンション</span></label>
+          <label class="type-chip-lbl"><input type="radio" name="buyType" value="kodate"><span>🏠 一戸建て</span></label>
+          <label class="type-chip-lbl"><input type="radio" name="buyType" value="tochi"><span>🗾 土地</span></label>
+          <label class="type-chip-lbl"><input type="radio" name="buyType" value="jimusho"><span>🏪 事務所</span></label>
+        </div>
       </div>
-      <div>
-        <div class="field-label">最寄駅 徒歩</div>
-        <select id="stationMin" class="field-input">
-          <option value="">制限なし</option>
-          <option value="3">3分以内</option>
-          <option value="5">5分以内</option>
-          <option value="10">10分以内</option>
-          <option value="15">15分以内</option>
-          <option value="20">20分以内</option>
-        </select>
+      <div class="search-grid2">
+        <div>
+          <div class="field-label">価格 <span id="priceLabel" style="font-weight:400;color:var(--c-text3)">指定なし</span></div>
+          <div class="range-row">
+            <input type="number" id="priceMin" placeholder="下限(万円)" class="field-input" min="0" oninput="updatePriceLabel();clearPriceError()">
+            <span class="range-sep">〜</span>
+            <input type="number" id="priceMax" placeholder="上限(万円)" class="field-input" min="0" oninput="updatePriceLabel();clearPriceError()">
+          </div>
+          <div class="field-error hidden" id="priceError">上限は下限より大きい値を入力してください</div>
+        </div>
+        <div>
+          <div class="field-label">面積 <span id="areaLabel" style="font-weight:400;color:var(--c-text3)">指定なし</span></div>
+          <div class="range-row">
+            <input type="number" id="areaMin" placeholder="下限(m²)" class="field-input" min="0" oninput="updateAreaLabel()">
+            <span class="range-sep">〜</span>
+            <input type="number" id="areaMax" placeholder="上限(m²)" class="field-input" min="0" oninput="updateAreaLabel()">
+          </div>
+        </div>
+        <div>
+          <div class="field-label">最寄駅 徒歩</div>
+          <select id="stationMin" class="field-input">
+            <option value="">制限なし</option>
+            <option value="3">3分以内</option>
+            <option value="5">5分以内</option>
+            <option value="10">10分以内</option>
+            <option value="15">15分以内</option>
+            <option value="20">20分以内</option>
+          </select>
+        </div>
       </div>
-      <div>
-        <div class="field-label">築年数</div>
-        <select id="ageMax" class="field-input">
-          <option value="">制限なし</option>
-          <option value="1">新築（1年以内）</option>
-          <option value="3">3年以内</option>
-          <option value="5">5年以内</option>
-          <option value="10">10年以内</option>
-          <option value="15">15年以内</option>
-          <option value="20">20年以内</option>
-          <option value="30">30年以内</option>
-        </select>
+      <div class="search-grid3" style="margin-top:14px">
+        <div>
+          <div class="field-label">間取り（複数選択可）</div>
+          <div class="rooms-wrap" id="roomsWrap">
+            <button type="button" class="rooms-btn field-input" onclick="toggleRoomsDropdown(event)">
+              <span id="roomsDisplay">すべて</span>
+              <i class="fas fa-chevron-down rooms-chevron" id="roomsChevron"></i>
+            </button>
+            <div class="rooms-popup hidden" id="roomsPopup">
+              <label><input type="checkbox" class="rooms-cb" value="1R" onchange="updateRoomsDisplay()"> 1R</label>
+              <label><input type="checkbox" class="rooms-cb" value="1K" onchange="updateRoomsDisplay()"> 1K</label>
+              <label><input type="checkbox" class="rooms-cb" value="1DK" onchange="updateRoomsDisplay()"> 1DK</label>
+              <label><input type="checkbox" class="rooms-cb" value="1LDK" onchange="updateRoomsDisplay()"> 1LDK</label>
+              <label><input type="checkbox" class="rooms-cb" value="2K" onchange="updateRoomsDisplay()"> 2K</label>
+              <label><input type="checkbox" class="rooms-cb" value="2DK" onchange="updateRoomsDisplay()"> 2DK</label>
+              <label><input type="checkbox" class="rooms-cb" value="2LDK" onchange="updateRoomsDisplay()"> 2LDK</label>
+              <label><input type="checkbox" class="rooms-cb" value="3LDK" onchange="updateRoomsDisplay()"> 3LDK</label>
+              <label><input type="checkbox" class="rooms-cb" value="4LDK" onchange="updateRoomsDisplay()"> 4LDK</label>
+              <label><input type="checkbox" class="rooms-cb" value="5LDK以上" onchange="updateRoomsDisplay()"> 5LDK+</label>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="field-label">築年数</div>
+          <select id="ageMax" class="field-input">
+            <option value="">制限なし</option>
+            <option value="1">新築（1年以内）</option>
+            <option value="3">3年以内</option>
+            <option value="5">5年以内</option>
+            <option value="10">10年以内</option>
+            <option value="15">15年以内</option>
+            <option value="20">20年以内</option>
+            <option value="30">30年以内</option>
+          </select>
+        </div>
+        <div>
+          <div class="field-label">利回り下限<span class="term-help" tabindex="0" data-tip="(年間家賃収入 ÷ 物件価格) × 100。例: 1億で年700万家賃 → 7.0%。">?</span></div>
+          <div class="range-row">
+            <input type="number" id="yieldMin" placeholder="例: 7.5" class="field-input" min="0" step="0.1">
+            <span class="range-sep">%以上</span>
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- Sites -->
-    <div class="sites-row">
-      <div class="sites-label">
-        対象サイト（${Object.keys(SITES).length}サイト）
-        <button class="sites-toggle-btn" onclick="toggleAllSites(true)">全選択</button>
-        <button class="sites-toggle-btn" onclick="toggleAllSites(false)" style="color:var(--c-text3)">全解除</button>
+    <!-- 賃貸フィールド -->
+    <div id="rentFields" class="hidden" style="margin-top:14px">
+      <div class="search-grid2">
+        <div>
+          <div class="field-label">家賃 <span id="rentPriceLabel" style="font-weight:400;color:var(--c-text3)">指定なし</span></div>
+          <div class="range-row">
+            <input type="number" id="rentPriceMin" placeholder="下限(万円/月)" class="field-input" min="0" oninput="updateRentPriceLabel()">
+            <span class="range-sep">〜</span>
+            <input type="number" id="rentPriceMax" placeholder="上限(万円/月)" class="field-input" min="0" oninput="updateRentPriceLabel()">
+          </div>
+        </div>
+        <div>
+          <div class="field-label">間取り（複数選択可）</div>
+          <div class="rooms-wrap" id="rentRoomsWrap">
+            <button type="button" class="rooms-btn field-input" onclick="toggleRentRoomsDropdown(event)">
+              <span id="rentRoomsDisplay">すべて</span>
+              <i class="fas fa-chevron-down rooms-chevron" id="rentRoomsChevron"></i>
+            </button>
+            <div class="rooms-popup hidden" id="rentRoomsPopup">
+              <label><input type="checkbox" class="rent-rooms-cb" value="1R" onchange="updateRentRoomsDisplay()"> 1R</label>
+              <label><input type="checkbox" class="rent-rooms-cb" value="1K" onchange="updateRentRoomsDisplay()"> 1K</label>
+              <label><input type="checkbox" class="rent-rooms-cb" value="1DK" onchange="updateRentRoomsDisplay()"> 1DK</label>
+              <label><input type="checkbox" class="rent-rooms-cb" value="1LDK" onchange="updateRentRoomsDisplay()"> 1LDK</label>
+              <label><input type="checkbox" class="rent-rooms-cb" value="2LDK" onchange="updateRentRoomsDisplay()"> 2LDK</label>
+              <label><input type="checkbox" class="rent-rooms-cb" value="3LDK" onchange="updateRentRoomsDisplay()"> 3LDK</label>
+            </div>
+          </div>
+        </div>
+        <div>
+          <div class="field-label">最寄駅 徒歩</div>
+          <select id="rentStationMin" class="field-input">
+            <option value="">制限なし</option>
+            <option value="3">3分以内</option>
+            <option value="5">5分以内</option>
+            <option value="10">10分以内</option>
+            <option value="15">15分以内</option>
+          </select>
+        </div>
       </div>
-      <div class="sites-grid" id="siteCheckboxes">
-        ${siteCheckboxes}
+      <div class="search-grid3" style="margin-top:14px">
+        <div>
+          <div class="field-label">築年数</div>
+          <select id="rentAgeMax" class="field-input">
+            <option value="">制限なし</option>
+            <option value="1">新築（1年以内）</option>
+            <option value="5">5年以内</option>
+            <option value="10">10年以内</option>
+            <option value="20">20年以内</option>
+          </select>
+        </div>
+        <div>
+          <div class="field-label">面積 下限</div>
+          <div class="range-row">
+            <input type="number" id="rentAreaMin" placeholder="下限(m²)" class="field-input" min="0">
+            <span class="range-sep">m²以上</span>
+          </div>
+        </div>
       </div>
     </div>
+
+    <!-- 投資フィールド -->
+    <div id="investFields" class="hidden" style="margin-top:14px">
+      <div style="margin-bottom:12px">
+        <div class="field-label">建物種別（複数選択可）</div>
+        <div class="invest-type-grid">
+          <label class="invest-type-lbl"><input type="checkbox" class="invest-type-cb" value="一棟マンション"><span>🏢 一棟マンション</span></label>
+          <label class="invest-type-lbl"><input type="checkbox" class="invest-type-cb" value="一棟アパート"><span>🏗 一棟アパート</span></label>
+          <label class="invest-type-lbl"><input type="checkbox" class="invest-type-cb" value="区分マンション"><span>🏬 区分マンション</span></label>
+          <label class="invest-type-lbl"><input type="checkbox" class="invest-type-cb" value="戸建賃貸"><span>🏠 戸建賃貸</span></label>
+          <label class="invest-type-lbl"><input type="checkbox" class="invest-type-cb" value="土地"><span>🗾 土地</span></label>
+        </div>
+      </div>
+      <div class="search-grid2">
+        <div>
+          <div class="field-label">価格 <span id="investPriceLabel" style="font-weight:400;color:var(--c-text3)">指定なし</span></div>
+          <div class="range-row">
+            <input type="number" id="investPriceMin" placeholder="下限(万円)" class="field-input" min="0" oninput="updateInvestPriceLabel()">
+            <span class="range-sep">〜</span>
+            <input type="number" id="investPriceMax" placeholder="上限(万円)" class="field-input" min="0" oninput="updateInvestPriceLabel()">
+          </div>
+        </div>
+        <div>
+          <div class="field-label">利回り下限 <span class="term-help" tabindex="0" data-tip="(年間家賃収入 ÷ 物件価格) × 100。例: 1億で年700万家賃 → 7.0%。">?</span></div>
+          <div class="range-row">
+            <input type="number" id="investYieldMin" placeholder="例: 8.0" class="field-input" min="0" step="0.5">
+            <span class="range-sep">%以上</span>
+          </div>
+        </div>
+        <div>
+          <div class="field-label">築年数</div>
+          <select id="investAgeMax" class="field-input">
+            <option value="">制限なし</option>
+            <option value="5">5年以内</option>
+            <option value="10">10年以内</option>
+            <option value="20">20年以内</option>
+            <option value="30">30年以内</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sites Accordion -->
+    <details class="sites-accordion" id="sitesAccordion">
+      <summary>
+        <i class="fas fa-globe" style="color:var(--c-primary)"></i>
+        対象サイト: <span id="sitesAccordionLabel">全サイト (${Object.keys(SITES).length})</span>
+        <i class="fas fa-chevron-down accordion-arrow"></i>
+      </summary>
+      <div class="sites-accordion-body">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+          <span class="field-label" style="margin:0">サイト選択</span>
+          <button class="sites-toggle-btn" onclick="toggleAllSites(true)">全選択</button>
+          <button class="sites-toggle-btn" onclick="toggleAllSites(false)" style="color:var(--c-text3)">全解除</button>
+        </div>
+        <div class="sites-grid" id="siteCheckboxes">
+          ${siteCheckboxes}
+        </div>
+      </div>
+    </details>
 
     <!-- Actions -->
-    <div class="actions-row">
-      <label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--c-text2);cursor:pointer">
-        <input type="checkbox" id="hideDuplicates" onchange="doSearch()" style="width:15px;height:15px;cursor:pointer">
-        重複非表示
-      </label>
-      <div class="sort-row">
-        <span class="sort-label">並び順:</span>
-        <select id="sortBy" class="field-input" style="width:auto">
-          <option value="newest">新着順</option>
-          <option value="price_asc">価格安い順</option>
-          <option value="price_desc">価格高い順</option>
-          <option value="area_desc">面積広い順</option>
-          <option value="area_asc">面積狭い順</option>
-          <option value="yield_desc">利回り高い順</option>
-          <option value="relevance">関連度順</option>
-        </select>
+    <div class="actions-row" style="margin-top:16px">
+      <div id="allSitesWarn" class="hidden" style="font-size:11px;color:var(--c-warning);display:none;align-items:center;gap:4px">
+        <i class="fas fa-exclamation-triangle"></i>全サイト選択は重くなることがあります
       </div>
       <div class="actions-spacer"></div>
       <button onclick="clearSearch()" class="btn-ghost">
         <i class="fas fa-times"></i>クリア
       </button>
-      <div id="allSitesWarn" class="hidden" style="font-size:11px;color:var(--c-warning);display:none;align-items:center;gap:4px">
-        <i class="fas fa-exclamation-triangle"></i>全サイト選択中は重くなることがあります
-      </div>
       <button onclick="doSearch()" id="searchBtn" class="search-btn">
         <i class="fas fa-search"></i>検索する
       </button>
@@ -1456,6 +1719,18 @@ img { max-width: 100%; }
     <span id="resultCount" class="results-count"></span>
     <span id="executionTime" class="results-time"></span>
     <span class="results-spacer"></span>
+    <div class="results-sort">
+      <span class="results-sort-lbl">並び順:</span>
+      <select id="sortBy" onchange="doSearch()" style="padding:5px 10px;border-radius:8px;border:1.5px solid var(--c-border);background:var(--c-surface);font-size:12px;color:var(--c-text)">
+        <option value="newest">新着順</option>
+        <option value="price_asc">価格↑</option>
+        <option value="price_desc">価格↓</option>
+        <option value="area_desc">面積↓</option>
+        <option value="area_asc">面積↑</option>
+        <option value="yield_desc">利回り↓</option>
+        <option value="relevance">関連度</option>
+      </select>
+    </div>
     <div class="view-btns">
       <button class="view-btn active" id="gridBtn" onclick="setView('grid')" title="グリッド">
         <i class="fas fa-th-large"></i>
@@ -1529,6 +1804,12 @@ img { max-width: 100%; }
 
 </main>
 
+<!-- =================== SNACKBAR =================== -->
+<div class="snackbar" id="snackbar">
+  <span class="snackbar-msg"></span>
+  <span class="snackbar-undo">元に戻す</span>
+</div>
+
 <!-- =================== PROPERTY MODAL =================== -->
 <div id="propertyModal" class="modal-overlay hidden" onclick="if(event.target===this)closeModal()">
   <div class="modal-box">
@@ -1590,6 +1871,8 @@ var PREF_DATA = ${prefJson};
 var currentPage = 1;
 var currentResults = null;
 var viewMode = 'grid';
+var currentSearchMode = 'buy'; // 'buy' | 'rent' | 'invest'
+var _savedSearchState = null;  // for undo snackbar
 
 // ── Theme ──
 function toggleTheme() {
@@ -1623,6 +1906,7 @@ function toggleTheme() {
         chip.querySelector('.chip-label').style.borderColor = '';
         chip.querySelector('.chip-label').style.color = '';
       }
+      updateSitesAccordionLabel();
     }
     update();
     cb.addEventListener('change', update);
@@ -1656,7 +1940,16 @@ function toggleTheme() {
     if (e.key === 'Escape') {
       var w = document.getElementById('welcomeOverlay');
       if (w && w.classList.contains('active')) closeWelcome(false);
+      closeRoomsDropdown();
     }
+  });
+
+  // Click-outside: close rooms dropdowns
+  document.addEventListener('click', function(e) {
+    var wrap1 = document.getElementById('roomsWrap');
+    var wrap2 = document.getElementById('rentRoomsWrap');
+    if (wrap1 && !wrap1.contains(e.target)) closeRoomsDropdown();
+    if (wrap2 && !wrap2.contains(e.target)) closeRentRoomsDropdown();
   });
 })();
 
@@ -1687,27 +1980,283 @@ function toggleAllSites(checked) {
   });
 }
 
+// ── Search Mode ──
+function setSearchMode(mode) {
+  currentSearchMode = mode;
+  ['buy','rent','invest'].forEach(function(m) {
+    var cap = m.charAt(0).toUpperCase() + m.slice(1);
+    var tabEl = document.getElementById('modeTab' + cap);
+    if (tabEl) tabEl.classList.toggle('active', m === mode);
+    var preEl = document.getElementById('preset' + cap);
+    if (preEl) preEl.classList.toggle('hidden', m !== mode);
+    var fEl = document.getElementById(m + 'Fields');
+    if (fEl) fEl.classList.toggle('hidden', m !== mode);
+  });
+  // Auto-select relevant sites per mode
+  var investSites = ['kenbiya','rakumachi'];
+  var rentSites = ['chintai','homes','smaity'];
+  document.querySelectorAll('.site-cb').forEach(function(cb) {
+    if (mode === 'invest') {
+      cb.checked = investSites.indexOf(cb.value) >= 0;
+    } else if (mode === 'rent') {
+      cb.checked = rentSites.indexOf(cb.value) >= 0;
+    } else {
+      cb.checked = true;
+    }
+    cb.dispatchEvent(new Event('change'));
+  });
+}
+
+// ── Preset Chips ──
+var PRESETS = {
+  buy_new:    { ageMax: '1' },
+  buy_st5:    { stationMin: '5' },
+  buy_3000:   { priceMax: '3000' },
+  buy_wide:   { areaMin: '70' },
+  rent_st5:   { rentStationMin: '5' },
+  rent_new:   { rentAgeMax: '5' },
+  rent_1ldk:  { rentRooms: ['1LDK'] },
+  rent_2ldk:  { rentRooms: ['2LDK'] },
+  inv_y8:     { investYieldMin: '8' },
+  inv_apt:    { investTypes: ['一棟アパート'], query: '一棟アパート' },
+  inv_munit:  { investTypes: ['区分マンション'], query: '区分マンション' },
+  inv_y10:    { investYieldMin: '10' },
+};
+function applyPreset(name, btn) {
+  var p = PRESETS[name];
+  if (!p) return;
+  var wasActive = btn.classList.contains('active');
+  // Deactivate sibling chips in same row
+  btn.closest('.preset-row').querySelectorAll('.preset-chip').forEach(function(c){ c.classList.remove('active'); });
+  if (!wasActive) {
+    btn.classList.add('active');
+    if (p.ageMax !== undefined) document.getElementById('ageMax').value = p.ageMax;
+    if (p.stationMin !== undefined) document.getElementById('stationMin').value = p.stationMin;
+    if (p.priceMax !== undefined) document.getElementById('priceMax').value = p.priceMax; updatePriceLabel();
+    if (p.areaMin !== undefined) document.getElementById('areaMin').value = p.areaMin; updateAreaLabel();
+    if (p.rentStationMin !== undefined) document.getElementById('rentStationMin').value = p.rentStationMin;
+    if (p.rentAgeMax !== undefined) document.getElementById('rentAgeMax').value = p.rentAgeMax;
+    if (p.rentRooms) {
+      document.querySelectorAll('.rent-rooms-cb').forEach(function(cb){ cb.checked = p.rentRooms.indexOf(cb.value) >= 0; });
+      updateRentRoomsDisplay();
+    }
+    if (p.investYieldMin !== undefined) document.getElementById('investYieldMin').value = p.investYieldMin;
+    if (p.investTypes) {
+      document.querySelectorAll('.invest-type-cb').forEach(function(cb){ cb.checked = p.investTypes.indexOf(cb.value) >= 0; });
+    }
+    if (p.query !== undefined) document.getElementById('searchQuery').value = p.query;
+  } else {
+    // Toggle off: reset this preset's fields
+    if (p.ageMax !== undefined) document.getElementById('ageMax').value = '';
+    if (p.stationMin !== undefined) document.getElementById('stationMin').value = '';
+    if (p.priceMax !== undefined) { document.getElementById('priceMax').value = ''; updatePriceLabel(); }
+    if (p.areaMin !== undefined) { document.getElementById('areaMin').value = ''; updateAreaLabel(); }
+    if (p.rentStationMin !== undefined) document.getElementById('rentStationMin').value = '';
+    if (p.rentAgeMax !== undefined) document.getElementById('rentAgeMax').value = '';
+    if (p.rentRooms) {
+      document.querySelectorAll('.rent-rooms-cb').forEach(function(cb){ cb.checked = false; });
+      updateRentRoomsDisplay();
+    }
+    if (p.investYieldMin !== undefined) document.getElementById('investYieldMin').value = '';
+    if (p.investTypes) {
+      document.querySelectorAll('.invest-type-cb').forEach(function(cb){ if (p.investTypes.indexOf(cb.value) >= 0) cb.checked = false; });
+    }
+    if (p.query !== undefined) document.getElementById('searchQuery').value = '';
+  }
+  doSearch();
+}
+
+// ── Rooms Multi-select ──
+function toggleRoomsDropdown(e) {
+  e.stopPropagation();
+  var popup = document.getElementById('roomsPopup');
+  popup.classList.toggle('hidden');
+  document.getElementById('roomsChevron').style.transform = popup.classList.contains('hidden') ? '' : 'rotate(180deg)';
+}
+function closeRoomsDropdown() {
+  var popup = document.getElementById('roomsPopup');
+  if (popup) { popup.classList.add('hidden'); }
+  var ch = document.getElementById('roomsChevron');
+  if (ch) ch.style.transform = '';
+}
+function updateRoomsDisplay() {
+  var sel = [].slice.call(document.querySelectorAll('.rooms-cb:checked')).map(function(c){ return c.value; });
+  document.getElementById('roomsDisplay').textContent = sel.length ? sel.join(', ') : 'すべて';
+}
+function toggleRentRoomsDropdown(e) {
+  e.stopPropagation();
+  var popup = document.getElementById('rentRoomsPopup');
+  popup.classList.toggle('hidden');
+  document.getElementById('rentRoomsChevron').style.transform = popup.classList.contains('hidden') ? '' : 'rotate(180deg)';
+}
+function closeRentRoomsDropdown() {
+  var popup = document.getElementById('rentRoomsPopup');
+  if (popup) { popup.classList.add('hidden'); }
+  var ch = document.getElementById('rentRoomsChevron');
+  if (ch) ch.style.transform = '';
+}
+function updateRentRoomsDisplay() {
+  var sel = [].slice.call(document.querySelectorAll('.rent-rooms-cb:checked')).map(function(c){ return c.value; });
+  document.getElementById('rentRoomsDisplay').textContent = sel.length ? sel.join(', ') : 'すべて';
+}
+
+// ── Sites Accordion Label ──
+function updateSitesAccordionLabel() {
+  var total = document.querySelectorAll('.site-cb').length;
+  var checked = document.querySelectorAll('.site-cb:checked').length;
+  var el = document.getElementById('sitesAccordionLabel');
+  if (el) el.textContent = checked === total ? '全サイト (' + total + ')' : checked + '/' + total + ' 選択中';
+}
+
+// ── Price Validation ──
+function clearPriceError() {
+  document.getElementById('priceMin').classList.remove('has-error');
+  document.getElementById('priceMax').classList.remove('has-error');
+  var el = document.getElementById('priceError');
+  if (el) el.classList.add('hidden');
+}
+function showPriceError() {
+  document.getElementById('priceMin').classList.add('has-error');
+  document.getElementById('priceMax').classList.add('has-error');
+  var el = document.getElementById('priceError');
+  if (el) el.classList.remove('hidden');
+}
+
+// ── Snackbar ──
+function showSnackbar(msg, undoFn) {
+  var sb = document.getElementById('snackbar');
+  sb.querySelector('.snackbar-msg').textContent = msg;
+  sb.classList.add('visible');
+  var undoBtn = sb.querySelector('.snackbar-undo');
+  undoBtn.style.display = undoFn ? '' : 'none';
+  undoBtn.onclick = function() { undoFn && undoFn(); sb.classList.remove('visible'); };
+  clearTimeout(sb._t);
+  sb._t = setTimeout(function(){ sb.classList.remove('visible'); }, 4000);
+}
+function captureSearchState() {
+  var rooms = [].slice.call(document.querySelectorAll('.rooms-cb:checked')).map(function(c){ return c.value; });
+  var rentRooms = [].slice.call(document.querySelectorAll('.rent-rooms-cb:checked')).map(function(c){ return c.value; });
+  var investTypes = [].slice.call(document.querySelectorAll('.invest-type-cb:checked')).map(function(c){ return c.value; });
+  var buyType = (document.querySelector('input[name="buyType"]:checked') || {}).value || '';
+  return {
+    mode: currentSearchMode,
+    query: document.getElementById('searchQuery').value,
+    prefecture: document.getElementById('prefecture').value,
+    status: document.getElementById('status').value,
+    priceMin: document.getElementById('priceMin').value,
+    priceMax: document.getElementById('priceMax').value,
+    areaMin: document.getElementById('areaMin').value,
+    areaMax: document.getElementById('areaMax').value,
+    stationMin: document.getElementById('stationMin').value,
+    ageMax: document.getElementById('ageMax').value,
+    yieldMin: document.getElementById('yieldMin').value,
+    rooms: rooms, rentRooms: rentRooms, investTypes: investTypes, buyType: buyType,
+    rentPriceMin: document.getElementById('rentPriceMin').value,
+    rentPriceMax: document.getElementById('rentPriceMax').value,
+    rentStationMin: document.getElementById('rentStationMin').value,
+    rentAgeMax: document.getElementById('rentAgeMax').value,
+    rentAreaMin: document.getElementById('rentAreaMin').value,
+    investPriceMin: document.getElementById('investPriceMin').value,
+    investPriceMax: document.getElementById('investPriceMax').value,
+    investYieldMin: document.getElementById('investYieldMin').value,
+    investAgeMax: document.getElementById('investAgeMax').value,
+  };
+}
+function restoreSearchState(state) {
+  if (!state) return;
+  setSearchMode(state.mode);
+  document.getElementById('searchQuery').value = state.query || '';
+  document.getElementById('prefecture').value = state.prefecture || '';
+  document.getElementById('status').value = state.status || 'active';
+  document.getElementById('priceMin').value = state.priceMin || '';
+  document.getElementById('priceMax').value = state.priceMax || '';
+  document.getElementById('areaMin').value = state.areaMin || '';
+  document.getElementById('areaMax').value = state.areaMax || '';
+  document.getElementById('stationMin').value = state.stationMin || '';
+  document.getElementById('ageMax').value = state.ageMax || '';
+  document.getElementById('yieldMin').value = state.yieldMin || '';
+  document.querySelectorAll('.rooms-cb').forEach(function(cb){ cb.checked = (state.rooms||[]).indexOf(cb.value) >= 0; });
+  updateRoomsDisplay();
+  document.querySelectorAll('.rent-rooms-cb').forEach(function(cb){ cb.checked = (state.rentRooms||[]).indexOf(cb.value) >= 0; });
+  updateRentRoomsDisplay();
+  document.querySelectorAll('.invest-type-cb').forEach(function(cb){ cb.checked = (state.investTypes||[]).indexOf(cb.value) >= 0; });
+  document.querySelectorAll('input[name="buyType"]').forEach(function(r){ r.checked = r.value === (state.buyType||''); });
+  document.getElementById('rentPriceMin').value = state.rentPriceMin || '';
+  document.getElementById('rentPriceMax').value = state.rentPriceMax || '';
+  document.getElementById('rentStationMin').value = state.rentStationMin || '';
+  document.getElementById('rentAgeMax').value = state.rentAgeMax || '';
+  document.getElementById('rentAreaMin').value = state.rentAreaMin || '';
+  document.getElementById('investPriceMin').value = state.investPriceMin || '';
+  document.getElementById('investPriceMax').value = state.investPriceMax || '';
+  document.getElementById('investYieldMin').value = state.investYieldMin || '';
+  document.getElementById('investAgeMax').value = state.investAgeMax || '';
+  updatePriceLabel(); updateAreaLabel();
+  doSearch();
+}
+
 // ── Search ──
 async function doSearch(page) {
   page = page || 1;
   currentPage = page;
 
   var q = new URLSearchParams();
+  var mode = currentSearchMode;
   var query = document.getElementById('searchQuery').value.trim();
   var pref = document.getElementById('prefecture').value;
-  var type = document.getElementById('propertyType').value;
   var status = document.getElementById('status').value;
-  var priceMin = document.getElementById('priceMin').value;
-  var priceMax = document.getElementById('priceMax').value;
-  var areaMin = document.getElementById('areaMin').value;
-  var areaMax = document.getElementById('areaMax').value;
-  var yieldMin = document.getElementById('yieldMin').value;
-  var rooms = document.getElementById('rooms').value;
-  var stationMin = document.getElementById('stationMin').value;
-  var ageMax = document.getElementById('ageMax').value;
-  var sortBy = document.getElementById('sortBy').value;
+  var sortBy = (document.getElementById('sortBy') || {}).value || 'newest';
   var sites = [].slice.call(document.querySelectorAll('.site-cb:checked')).map(function(cb) { return cb.value; });
-  var hideDuplicates = document.getElementById('hideDuplicates') && (document.getElementById('hideDuplicates') as HTMLInputElement).checked;
+  var hideDuplicates = !!(document.getElementById('hideDuplicates') && (document.getElementById('hideDuplicates') as HTMLInputElement).checked);
+
+  // Mode-specific field extraction
+  var type = '', priceMin = '', priceMax = '', areaMin = '', areaMax = '';
+  var rooms = '', stationMin = '', ageMax = '', yieldMin = '';
+
+  if (mode === 'buy') {
+    var buyTypeEl = document.querySelector('input[name="buyType"]:checked') as HTMLInputElement;
+    type = buyTypeEl ? buyTypeEl.value : '';
+    priceMin = document.getElementById('priceMin').value;
+    priceMax = document.getElementById('priceMax').value;
+    areaMin = document.getElementById('areaMin').value;
+    areaMax = document.getElementById('areaMax').value;
+    stationMin = document.getElementById('stationMin').value;
+    ageMax = document.getElementById('ageMax').value;
+    yieldMin = document.getElementById('yieldMin').value;
+    // Multi-select rooms
+    var selRooms = [].slice.call(document.querySelectorAll('.rooms-cb:checked')).map(function(c){ return (c as HTMLInputElement).value; });
+    rooms = selRooms.join(',');
+    // Price validation
+    if (priceMin && priceMax && parseInt(priceMin) > parseInt(priceMax)) {
+      showPriceError(); return;
+    }
+    clearPriceError();
+  } else if (mode === 'rent') {
+    // Map rent to chintai property types
+    var rentBuyTypeEl = document.querySelector('input[name="buyType"]') as HTMLInputElement;
+    type = 'chintai_mansion'; // default; could pick ikkodate later
+    priceMin = document.getElementById('rentPriceMin').value;
+    priceMax = document.getElementById('rentPriceMax').value;
+    areaMin = document.getElementById('rentAreaMin').value;
+    stationMin = document.getElementById('rentStationMin').value;
+    ageMax = document.getElementById('rentAgeMax').value;
+    var selRentRooms = [].slice.call(document.querySelectorAll('.rent-rooms-cb:checked')).map(function(c){ return (c as HTMLInputElement).value; });
+    rooms = selRentRooms.join(',');
+  } else if (mode === 'invest') {
+    type = 'investment';
+    priceMin = document.getElementById('investPriceMin').value;
+    priceMax = document.getElementById('investPriceMax').value;
+    yieldMin = document.getElementById('investYieldMin').value;
+    ageMax = document.getElementById('investAgeMax').value;
+    // Append invest building type as keyword
+    var investTypes = [].slice.call(document.querySelectorAll('.invest-type-cb:checked')).map(function(c){ return (c as HTMLInputElement).value; });
+    if (investTypes.length > 0 && !query) {
+      query = investTypes.join(' ');
+    } else if (investTypes.length > 0) {
+      query = query + ' ' + investTypes.join(' ');
+    }
+    // Always sort by yield for invest mode unless user changed it
+    if (sortBy === 'newest') sortBy = 'yield_desc';
+  }
 
   if (query) q.set('q', query);
   if (pref) q.set('prefecture', pref);
@@ -2079,8 +2628,23 @@ function setView(mode) {
 
 // ── Clear ──
 function clearSearch() {
-  ['searchQuery','priceMin','priceMax','areaMin','areaMax','yieldMin'].forEach(function(id){ document.getElementById(id).value=''; });
-  document.querySelectorAll('select').forEach(function(s){ s.selectedIndex=0; });
+  _savedSearchState = captureSearchState();
+
+  ['searchQuery','priceMin','priceMax','areaMin','areaMax','yieldMin',
+   'rentPriceMin','rentPriceMax','rentAreaMin','investPriceMin','investPriceMax','investYieldMin'
+  ].forEach(function(id){ var el = document.getElementById(id); if (el) (el as HTMLInputElement).value = ''; });
+  document.querySelectorAll('select').forEach(function(s){ (s as HTMLSelectElement).selectedIndex = 0; });
+  // Reset buy type to "すべて"
+  var firstBuyType = document.querySelector('input[name="buyType"]') as HTMLInputElement;
+  if (firstBuyType) firstBuyType.checked = true;
+  // Clear multi-select rooms
+  document.querySelectorAll('.rooms-cb,.rent-rooms-cb').forEach(function(cb){ (cb as HTMLInputElement).checked = false; });
+  updateRoomsDisplay(); updateRentRoomsDisplay();
+  // Clear invest type
+  document.querySelectorAll('.invest-type-cb').forEach(function(cb){ (cb as HTMLInputElement).checked = false; });
+  // Clear preset chips
+  document.querySelectorAll('.preset-chip').forEach(function(c){ c.classList.remove('active'); });
+  clearPriceError();
   toggleAllSites(true);
   updatePriceLabel(); updateAreaLabel();
   document.getElementById('resultsContainer').innerHTML = '';
@@ -2092,6 +2656,8 @@ function clearSearch() {
   document.getElementById('initialState').classList.remove('hidden');
   document.getElementById('emptyState').classList.add('hidden');
   currentResults = null;
+
+  showSnackbar('検索条件をクリアしました', function(){ restoreSearchState(_savedSearchState); });
 }
 
 // ── Label Updaters ──
@@ -2102,6 +2668,14 @@ function updatePriceLabel() {
 function updateAreaLabel() {
   var mn = document.getElementById('areaMin').value, mx = document.getElementById('areaMax').value;
   document.getElementById('areaLabel').textContent = (mn||mx) ? (mn||'-')+'〜'+(mx||'-')+'m²' : '指定なし';
+}
+function updateRentPriceLabel() {
+  var mn = document.getElementById('rentPriceMin').value, mx = document.getElementById('rentPriceMax').value;
+  document.getElementById('rentPriceLabel').textContent = (mn||mx) ? (mn||'-')+'〜'+(mx||'-')+'万円/月' : '指定なし';
+}
+function updateInvestPriceLabel() {
+  var mn = document.getElementById('investPriceMin').value, mx = document.getElementById('investPriceMax').value;
+  document.getElementById('investPriceLabel').textContent = (mn||mx) ? (mn||'-')+'〜'+(mx||'-')+'万円' : '指定なし';
 }
 
 // ── Error ──
