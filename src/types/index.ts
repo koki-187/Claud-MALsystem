@@ -20,11 +20,15 @@ export const PREFECTURES: Record<PrefectureCode, string> = {
   '46': '鹿児島県', '47': '沖縄県',
 };
 
-// 'suumo' | 'athome' | 'reins' は直接スクレイパーを削除済みだが、D1 の既存行との
-// 型互換性を維持するため SiteId に残す。新規スクレイピングは行わない。
-// 新規データは terass_suumo / terass_athome / terass_reins として取り込まれる。
-export type SiteId = 'suumo' | 'homes' | 'athome' | 'fudosan' | 'chintai' | 'smaity' | 'reins' | 'kenbiya' | 'rakumachi'
+/** D1 の既存行との後方互換用。新規スクレイプは行わない。 */
+type _DeprecatedSiteId = 'suumo' | 'athome' | 'reins';
+
+/** アクティブなサイト ID。新規スクレイプ・ UI 表示はこの型を使用する。 */
+export type ActiveSiteId = 'homes' | 'fudosan' | 'chintai' | 'smaity' | 'kenbiya' | 'rakumachi'
   | 'terass_reins' | 'terass_suumo' | 'terass_athome';
+
+/** 全サイト ID (DB の既存行を含む)。型チェック緩和が必要な場合のみ使用。 */
+export type SiteId = ActiveSiteId | _DeprecatedSiteId;
 
 export interface SiteConfig {
   id: SiteId;

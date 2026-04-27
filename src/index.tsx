@@ -74,13 +74,6 @@ app.use('/api/search/master', async (c, next) => {
   await next();
 });
 
-// 5 req/min per IP on /api/scrape/run
-app.use('/api/scrape/run', async (c, next) => {
-  const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
-  const allowed = await checkRateLimit(c.env.MAL_CACHE, `scrape:${ip}`, 5, 60);
-  if (!allowed) return c.json({ error: 'Too Many Requests' }, 429);
-  await next();
-});
 
 // =====================
 // API Routes
@@ -120,6 +113,26 @@ app.get('/api/search', async (c) => {
       await c.env.MAL_CACHE.put(cacheKey, JSON.stringify(dbResult), { expirationTtl: 3600 }).catch(() => {});
       logSearch(c.env.MAL_DB, params, dbResult.total, Date.now() - startTime).catch(() => {});
       return c.json(dbResult);
+    }
+
+    // フォールバック判定: 対象県に物件データが存在しない場合のみライブスクレイプ。
+    // 条件を絞りすぎた検索 (例: 築1年以内+利回り12%以上) でDBが0件を返しても、
+    // 県データが存在するなら空結果をそのまま返す (不要なスクレイプを防ぐ)。
+    if (params.prefecture) {
+      const hasData = await c.env.MAL_DB
+        .prepare("SELECT 1 FROM properties WHERE prefecture = ? AND status = 'active' LIMIT 1")
+        .bind(params.prefecture)
+        .first()
+        .catch(() => null);
+      if (hasData) {
+        // 県データはあるがフィルター条件に一致なし → 空結果を返す
+        const emptyResult = {
+          properties: [], total: 0, page: params.page ?? 1, limit: params.limit ?? 18,
+          totalPages: 0, sites: [], executionTimeMs: Date.now() - startTime, cacheHit: false,
+        };
+        logSearch(c.env.MAL_DB, params, 0, Date.now() - startTime).catch(() => {});
+        return c.json(emptyResult);
+      }
     }
 
     const { properties, siteResults } = await aggregateSearch(params, c.env);
@@ -217,11 +230,6 @@ app.get('/api/scrape/status', async (c) => {
   }
 });
 
-// /api/scrape/run は廃止 (認証なし公開エンドポイントのため外部スクレイプ誤トリガーリスク)
-// 同等機能は POST /api/admin/scrape (Bearer 認証必須) を使用してください。
-app.post('/api/scrape/run', (c) => c.json({
-  error: 'Endpoint removed. Use POST /api/admin/scrape with Bearer auth instead.',
-}, 410));
 
 app.get('/manifest.json', (c) => c.json({
   name: 'MAL検索システム',
@@ -786,7 +794,7 @@ img { max-width: 100%; }
 .prop-grid.list-1 .prop-card { display: flex; }
 .prop-grid.list-1 .prop-img-wrap { width: 200px; min-width: 200px; height: auto; min-height: 140px; }
 .prop-grid.list-1 .prop-body { flex: 1; display: flex; flex-direction: column; justify-content: space-between; }
-@media(max-width:600px) { .prop-grid.list-1 .prop-card { flex-direction: column; } .prop-grid.list-1 .prop-img-wrap { width: 100%; min-height: 160px; } }
+@media(max-width:600px) { .prop-grid.list-1 .prop-card { flex-direction: column; } .prop-grid.list-1 .prop-img-wrap { width: 100%; min-height: 80px; max-height: 120px; } }
 
 /* ── Loading Skeleton ── */
 .skeleton-card { pointer-events: none; }
@@ -1223,7 +1231,7 @@ img { max-width: 100%; }
 
     <div class="welcome-actions">
       <label class="welcome-skip">
-        <input type="checkbox" id="welcomeDontShow" checked>
+        <input type="checkbox" id="welcomeDontShow">
         次回から表示しない
       </label>
       <div class="actions-spacer"></div>
@@ -1381,7 +1389,7 @@ img { max-width: 100%; }
     <!-- Sites -->
     <div class="sites-row">
       <div class="sites-label">
-        対象サイト（12サイト）
+        対象サイト（${Object.keys(SITES).length}サイト）
         <button class="sites-toggle-btn" onclick="toggleAllSites(true)">全選択</button>
         <button class="sites-toggle-btn" onclick="toggleAllSites(false)" style="color:var(--c-text3)">全解除</button>
       </div>
@@ -1412,22 +1420,25 @@ img { max-width: 100%; }
       <button onclick="clearSearch()" class="btn-ghost">
         <i class="fas fa-times"></i>クリア
       </button>
+      <div id="allSitesWarn" class="hidden" style="font-size:11px;color:var(--c-warning);display:none;align-items:center;gap:4px">
+        <i class="fas fa-exclamation-triangle"></i>全サイト選択中は重くなることがあります
+      </div>
       <button onclick="doSearch()" id="searchBtn" class="search-btn">
         <i class="fas fa-search"></i>検索する
       </button>
     </div>
   </div>
 
-  <!-- Export Bar -->
-  <div class="export-bar">
+  <!-- Export Bar (検索結果表示後のみ表示) -->
+  <div class="export-bar hidden" id="exportBar">
     <button onclick="exportCSV()" class="btn-export">
       📥 CSV ダウンロード
     </button>
-    <button onclick="window.location.href='/api/admin/stats'" class="btn-admin">
-      📊 DB統計
-    </button>
     <button onclick="showImportHistoryModal()" class="btn-admin">
       📋 取込履歴
+    </button>
+    <button onclick="window.location.href='/api/admin/stats'" class="btn-admin" style="margin-left:auto;font-size:11px;opacity:.6">
+      DB統計
     </button>
   </div>
 
@@ -1714,6 +1725,8 @@ async function doSearch(page) {
   var totalSites = Object.keys(SITES_DATA).length;
   if (sites.length > 0 && sites.length < totalSites) q.set('sites', sites.join(','));
   q.set('sort', sortBy);
+  var warn = document.getElementById('allSitesWarn');
+  if (warn) warn.style.display = sites.length >= totalSites ? 'inline-flex' : 'none';
   q.set('page', String(page));
   q.set('limit', '18');
 
@@ -1749,6 +1762,7 @@ function setLoading(on) {
 function renderResults(data) {
   var bar = document.getElementById('resultsBar');
   bar.classList.add('visible');
+  document.getElementById('exportBar').classList.remove('hidden');
   document.getElementById('resultCount').textContent = (data.total || 0).toLocaleString() + '件の物件';
   var cacheStr = data.cacheHit ? ' · キャッシュ' : '';
   document.getElementById('executionTime').textContent = (data.executionTimeMs || 0) + 'ms' + cacheStr;
@@ -1782,6 +1796,7 @@ function renderCard(p) {
   var site = SITES_DATA[p.siteId] || {};
   var color = site.color || '#64748b';
   var isSold = p.status === 'sold' || p.status === 'delisted';
+  var hasPrice = !!(p.price || (p.priceText && p.priceText !== '価格要相談'));
   var priceStr = p.price ? p.price.toLocaleString() + '万円' : (p.priceText || '価格要相談');
   var prefName = PREF_DATA[p.prefecture] || '';
 
@@ -1817,7 +1832,7 @@ function renderCard(p) {
     + '<div class="prop-body">'
     + '<div class="prop-title">' + escHtml(p.title) + '</div>'
     + '<div class="prop-location"><i class="fas fa-map-marker-alt"></i>' + escHtml(prefName + ' ' + (p.city || '')) + (stationStr ? '<span style="margin-left:8px">' + stationStr + '</span>' : '') + '</div>'
-    + '<div class="prop-price" style="color:' + (isSold ? 'var(--c-text3)' : color) + '">' + (isSold ? '<span style="font-size:14px;text-decoration:line-through">' : '') + escHtml(priceStr) + (isSold ? '</span>' : '') + '</div>'
+    + '<div class="prop-price" style="color:' + (isSold ? 'var(--c-text3)' : hasPrice ? color : 'var(--c-text4)') + (hasPrice ? '' : ';font-size:13px;font-style:italic;font-weight:600') + '">' + (isSold ? '<span style="font-size:14px;text-decoration:line-through">' : '') + escHtml(priceStr) + (isSold ? '</span>' : '') + '</div>'
     + '<div class="prop-specs">' + specs.join('') + '</div>'
     + '<div class="prop-footer">'
     + '<span style="font-size:11px;color:var(--c-text4)">' + formatDate(p.scrapedAt)
@@ -1843,9 +1858,18 @@ function formatDate(iso) {
 
 function renderPagination(data) {
   var el = document.getElementById('pagination');
-  if (!data.totalPages || data.totalPages <= 1) { el.innerHTML = ''; return; }
-  var cur = data.page, tot = data.totalPages;
-  var html = '';
+  var limit = data.limit || 18;
+  var cur = data.page || 1;
+  var tot = data.totalPages || 1;
+  var total = data.total || 0;
+  var from = (cur - 1) * limit + 1;
+  var to = Math.min(cur * limit, total);
+  var rangeInfo = total > 0
+    ? '<div style="width:100%;text-align:center;font-size:12px;color:var(--c-text3);margin-bottom:8px">'
+      + from.toLocaleString() + '〜' + to.toLocaleString() + '件目 / 全' + total.toLocaleString() + '件</div>'
+    : '';
+  if (!data.totalPages || data.totalPages <= 1) { el.innerHTML = rangeInfo; return; }
+  var html = rangeInfo;
   if (cur > 1) html += '<button class="page-btn" onclick="doSearch(' + (cur-1) + ')"><i class="fas fa-chevron-left"></i></button>';
   for (var i = Math.max(1,cur-2); i <= Math.min(tot,cur+2); i++) {
     html += '<button class="page-btn' + (i===cur?' active':'') + '" onclick="doSearch(' + i + ')">' + i + '</button>';
@@ -2064,6 +2088,7 @@ function clearSearch() {
   document.getElementById('siteSummary').innerHTML = '';
   document.getElementById('filterChips').innerHTML = '';
   document.getElementById('resultsBar').classList.remove('visible');
+  document.getElementById('exportBar').classList.add('hidden');
   document.getElementById('initialState').classList.remove('hidden');
   document.getElementById('emptyState').classList.add('hidden');
   currentResults = null;

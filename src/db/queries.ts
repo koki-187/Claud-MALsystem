@@ -57,7 +57,7 @@ export async function searchProperties(
     bindings.push(params.ageMax);
   }
   if (params.stationMinutes !== undefined) {
-    whereClauses.push('(p.station_minutes IS NULL OR p.station_minutes <= ?)');
+    whereClauses.push('p.station_minutes IS NOT NULL AND p.station_minutes <= ?');
     bindings.push(params.stationMinutes);
   }
   if (params.yieldMin !== undefined) {
