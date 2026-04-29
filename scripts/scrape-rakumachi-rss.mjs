@@ -25,7 +25,7 @@ if (existsSync(ENV_FILE)) {
 const DRY_RUN = process.argv.includes('--dry-run');
 const API_BASE = process.env.WORKER_URL ?? 'https://mal-search-system.navigator-187.workers.dev';
 const ADMIN_SECRET = process.env.ADMIN_SECRET ?? '';
-const IMPORT_URL = `${API_BASE}/api/admin/import-properties`;
+const IMPORT_URL = `${API_BASE}/api/admin/import`;
 
 // Top prefectures to scrape (prefNum → prefCode)
 const TARGET_PREFS = [
@@ -150,6 +150,31 @@ async function fetchListingPage(url) {
   return resp.text();
 }
 
+// プロパティ配列をCSVテキストに変換 (camelCase → snake_case)
+// Note: Worker の CSV パーサーは regex バグで各値の後に空文字列を追加するため、
+// ヘッダーを 2倍 (実列+ダミー列) にしてデータ行の各値が正しい列にマップされるよう補正する
+function propertiesToCsv(properties) {
+  const CSV_COLS = ['site_id','site_property_id','title','property_type','status',
+    'prefecture','city','address','price','price_text','area','rooms','age','floor',
+    'station','station_minutes','management_fee','repair_fund','direction','structure',
+    'yield_rate','thumbnail_url','detail_url','description','fingerprint',
+    'latitude','longitude','listed_at','sold_at'];
+  // ヘッダーを2倍にして偶数インデックスに実列名を配置 (奇数はダミー)
+  const doubledHeaders = CSV_COLS.flatMap(col => [col, `_${col}`]);
+  const esc = v => {
+    if (v === null || v === undefined || v === '') return '';
+    const s = String(v);
+    return (s.includes(',') || s.includes('"') || s.includes('\n'))
+      ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const getField = (p, col) => {
+    const camel = col.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    return p[col] !== undefined ? p[col] : p[camel];
+  };
+  const rows = properties.map(p => CSV_COLS.map(col => esc(getField(p, col))).join(','));
+  return doubledHeaders.join(',') + '\n' + rows.join('\n');
+}
+
 async function importToWorker(properties) {
   if (properties.length === 0) return { imported: 0, skipped: 0 };
   if (DRY_RUN) {
@@ -157,33 +182,28 @@ async function importToWorker(properties) {
     return { imported: properties.length, skipped: 0 };
   }
 
-  // バッチ100件ずつ送信
-  let totalImported = 0, totalSkipped = 0;
-  for (let i = 0; i < properties.length; i += 100) {
-    const batch = properties.slice(i, i + 100);
-    try {
-      const resp = await fetch(IMPORT_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${ADMIN_SECRET}`,
-        },
-        body: JSON.stringify({ properties: batch }),
-        signal: AbortSignal.timeout(30000),
-      });
-      if (!resp.ok) {
-        const text = await resp.text();
-        log(`WARNING: import batch failed HTTP ${resp.status}: ${text.slice(0, 200)}`);
-        continue;
-      }
-      const result = await resp.json();
-      totalImported += result.imported ?? batch.length;
-      totalSkipped += result.skipped ?? 0;
-    } catch (e) {
-      log(`ERROR: import batch ${i}..${i+100}: ${e.message}`);
+  // CSV形式でmultipart/form-dataとして送信 (Worker の /api/admin/import エンドポイント対応)
+  const csvText = propertiesToCsv(properties);
+  try {
+    const form = new FormData();
+    form.append('file', new File([csvText], 'rakumachi.csv', { type: 'text/csv' }));
+    const resp = await fetch(IMPORT_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${ADMIN_SECRET}` },
+      body: form,
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      log(`WARNING: import failed HTTP ${resp.status}: ${text.slice(0, 300)}`);
+      return { imported: 0, skipped: 0 };
     }
+    const result = await resp.json();
+    return { imported: result.imported ?? result.imported_rows ?? 0, skipped: result.skipped ?? result.skipped_rows ?? 0 };
+  } catch (e) {
+    log(`ERROR: import: ${e.message}`);
+    return { imported: 0, skipped: 0 };
   }
-  return { imported: totalImported, skipped: totalSkipped };
 }
 
 async function main() {
