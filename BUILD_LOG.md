@@ -28,14 +28,14 @@
      - 並び順を結果バーへ移動 (SUUMO/HOME'S準拠)
      - サイト選択をアコーディオン折り畳みへ変更
      - 価格上下限バリデーション + クリア後スナックバー undo機能
-- **デプロイ**: ⚠️ 未 — `scripts\_deploy.ps1` または `wrangler deploy` 実行要
-  - HTTP 400 "multipart/form-data required" エラーは旧バージョンのデプロイ起因
-  - デプロイ後にローカルスクレーパーを再実行してデータ収集 (dry-runは確認済み)
+- **デプロイ**: ✅ 済 — 2026-04-29 21:19 `scripts\_deploy.bat` ダブルクリックにて実行
+  - Worker URL: https://mal-search-system.navigator-187.workers.dev
+  - 3モードUI・プリセットチップ・サイトアコーディオン 動作確認済み
 - **git**: push 済み (5b8bf66 → master)
 - **次のタスク**:
-  1. ⚠️ **必須**: `scripts\_deploy.ps1` 実行 → wrangler deploy
-  2. ⚠️ **必須**: デプロイ後にローカルスクレーパー再実行 (実データ収集)
-     - `node scripts/scrape-sites-local.mjs --site=all`
+  1. ✅ ~~デプロイ~~ 完了
+  2. ⚠️ **必須**: ローカルスクレーパー実行 (実データ収集)
+     - `cd C:\Users\reale\Downloads\mal-worker && node scripts/scrape-sites-local.mjs --site=all`
      - `node scripts/scrape-rakumachi-rss.mjs`
   3. 検索UIの動作確認 (3モード切替・プリセット・間取り複数選択)
 

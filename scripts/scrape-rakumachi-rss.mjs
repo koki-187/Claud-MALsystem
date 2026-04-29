@@ -25,7 +25,7 @@ if (existsSync(ENV_FILE)) {
 const DRY_RUN = process.argv.includes('--dry-run');
 const API_BASE = process.env.WORKER_URL ?? 'https://mal-search-system.navigator-187.workers.dev';
 const ADMIN_SECRET = process.env.ADMIN_SECRET ?? '';
-const IMPORT_URL = `${API_BASE}/api/admin/import`;
+const IMPORT_URL = `${API_BASE}/api/admin/import-properties`;
 
 // Top prefectures to scrape (prefNum → prefCode)
 const TARGET_PREFS = [

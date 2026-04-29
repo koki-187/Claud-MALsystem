@@ -24,7 +24,7 @@ const DRY_RUN = process.argv.includes('--dry-run');
 const SITE_ARG = process.argv.find(a => a.startsWith('--site='))?.split('=')[1] ?? 'all';
 const API_BASE = process.env.WORKER_URL ?? 'https://mal-search-system.navigator-187.workers.dev';
 const ADMIN_SECRET = process.env.ADMIN_SECRET ?? '';
-const IMPORT_URL = `${API_BASE}/api/admin/import`;
+const IMPORT_URL = `${API_BASE}/api/admin/import-properties`;
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 

@@ -218,6 +218,124 @@ admin.get('/export.csv', async (c) => {
   return new Response(readable, { headers });
 });
 
+// ─── POST /api/admin/import-properties ───────────────────────────────────────
+// スクレイパーからのJSONプロパティ直接インポート (camelCase対応)
+admin.post('/import-properties', async (c) => {
+  const env = c.env;
+
+  type PropInput = {
+    siteId?: string; site_id?: string;
+    sitePropertyId?: string; site_property_id?: string;
+    title?: string;
+    propertyType?: string; property_type?: string;
+    status?: string;
+    prefecture?: string;
+    city?: string;
+    address?: string;
+    price?: number | string | null;
+    priceText?: string; price_text?: string;
+    area?: number | string | null;
+    rooms?: string | null;
+    age?: number | string | null;
+    floor?: number | string | null;
+    station?: string | null;
+    stationMinutes?: number | string | null; station_minutes?: number | string | null;
+    managementFee?: number | string | null; management_fee?: number | string | null;
+    repairFund?: number | string | null; repair_fund?: number | string | null;
+    direction?: string | null;
+    structure?: string | null;
+    yieldRate?: number | string | null; yield_rate?: number | string | null;
+    thumbnailUrl?: string | null; thumbnail_url?: string | null;
+    detailUrl?: string; detail_url?: string;
+    description?: string | null;
+    fingerprint?: string | null;
+    latitude?: number | string | null;
+    longitude?: number | string | null;
+    listedAt?: string | null; listed_at?: string | null;
+    soldAt?: string | null; sold_at?: string | null;
+  };
+
+  let properties: PropInput[];
+  try {
+    const body = await c.req.json<{ properties: PropInput[] }>();
+    properties = body.properties;
+    if (!Array.isArray(properties)) throw new Error('properties must be array');
+  } catch {
+    return c.json({ error: 'JSON body with {properties: [...]} required' }, 400);
+  }
+
+  const db = env.MAL_DB;
+  let imported = 0, skipped = 0, errors = 0;
+
+  for (const p of properties) {
+    const siteId = p.siteId ?? p.site_id ?? '';
+    const sitePropertyId = p.sitePropertyId ?? p.site_property_id ?? '';
+    if (!siteId || !sitePropertyId) { skipped++; continue; }
+
+    const id = `${siteId}_${sitePropertyId}`;
+    const num = (v: unknown) => (v !== null && v !== undefined && v !== '') ? Number(v) : null;
+    const str = (v: unknown) => (v !== null && v !== undefined) ? String(v) : null;
+
+    try {
+      await db.prepare(`
+        INSERT INTO properties (
+          id, site_id, site_property_id, title, property_type, status,
+          prefecture, city, address, price, price_text, area,
+          rooms, age, floor, station, station_minutes,
+          management_fee, repair_fund, direction, structure,
+          yield_rate, thumbnail_url, detail_url, description,
+          fingerprint, latitude, longitude,
+          listed_at, sold_at, last_seen_at, import_session_id,
+          created_at, updated_at, scraped_at
+        ) VALUES (
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?,
+          ?, ?, ?, ?,
+          ?, ?, ?,
+          ?, ?, datetime('now'), null,
+          datetime('now'), datetime('now'), datetime('now')
+        )
+        ON CONFLICT(site_id, site_property_id) DO UPDATE SET
+          title          = excluded.title,
+          price          = excluded.price,
+          price_text     = excluded.price_text,
+          status         = excluded.status,
+          description    = excluded.description,
+          fingerprint    = excluded.fingerprint,
+          yield_rate     = excluded.yield_rate,
+          thumbnail_url  = excluded.thumbnail_url,
+          last_seen_at   = datetime('now'),
+          updated_at     = datetime('now')
+      `).bind(
+        id, siteId, sitePropertyId,
+        str(p.title) ?? '', str(p.propertyType ?? p.property_type) ?? 'other', str(p.status) ?? 'active',
+        str(p.prefecture) ?? '13', str(p.city) ?? '', str(p.address),
+        num(p.price), str(p.priceText ?? p.price_text) ?? '',
+        num(p.area),
+        str(p.rooms),
+        num(p.age), num(p.floor),
+        str(p.station), num(p.stationMinutes ?? p.station_minutes),
+        num(p.managementFee ?? p.management_fee), num(p.repairFund ?? p.repair_fund),
+        str(p.direction), str(p.structure),
+        num(p.yieldRate ?? p.yield_rate),
+        str(p.thumbnailUrl ?? p.thumbnail_url), str(p.detailUrl ?? p.detail_url) ?? '',
+        str(p.description),
+        str(p.fingerprint),
+        num(p.latitude), num(p.longitude),
+        str(p.listedAt ?? p.listed_at), str(p.soldAt ?? p.sold_at),
+      ).run();
+      imported++;
+    } catch (e) {
+      errors++;
+      console.error(`[import-properties] error on ${id}:`, e);
+    }
+  }
+
+  return c.json({ imported, skipped, errors });
+});
+
 // ─── POST /api/admin/import/session/start ────────────────────────────────────
 // TERASS フルインポート1回分のセッションを作成 (delisted 検知の基準点)
 admin.post('/import/session/start', async (c) => {
