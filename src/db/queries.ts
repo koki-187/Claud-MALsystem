@@ -94,40 +94,31 @@ export async function searchProperties(
   };
   const orderSQL = sortMap[params.sortBy ?? 'newest'] ?? 'p.scraped_at DESC';
 
-  const countResult = await db
-    .prepare(`SELECT COUNT(*) as total FROM properties p ${whereSQL}`)
-    .bind(...bindings)
-    .first<{ total: number }>();
-
-  const total = countResult?.total ?? 0;
-
-  const rows = await db
-    .prepare(`
-      SELECT p.*,
-        GROUP_CONCAT(DISTINCT pi.image_url) as images_concat,
-        GROUP_CONCAT(DISTINCT pi.r2_key) as image_keys_concat,
-        GROUP_CONCAT(DISTINCT pf.feature) as features_concat
-      FROM properties p
-      LEFT JOIN property_images pi ON pi.property_id = p.id
-      LEFT JOIN property_features pf ON pf.property_id = p.id
-      ${whereSQL}
-      GROUP BY p.id
-      ORDER BY ${orderSQL}
-      LIMIT ? OFFSET ?
-    `)
-    .bind(...bindings, limit, offset)
-    .all<Record<string, unknown>>();
+  // 1クエリで物件リストとサイト別件数を並列取得 (COUNT(*)クエリを排除)
+  const [rows, siteCountRows] = await Promise.all([
+    db
+      .prepare(`
+        SELECT p.*
+        FROM properties p
+        ${whereSQL}
+        ORDER BY ${orderSQL}
+        LIMIT ? OFFSET ?
+      `)
+      .bind(...bindings, limit, offset)
+      .all<Record<string, unknown>>(),
+    db
+      .prepare(`SELECT site_id, COUNT(*) as cnt FROM properties p ${whereSQL} GROUP BY site_id`)
+      .bind(...bindings)
+      .all<{ site_id: SiteId; cnt: number }>(),
+  ]);
 
   const properties: Property[] = (rows.results ?? []).map(rowToProperty);
 
   // suumo / athome / reins の直接スクレイパーは削除済み。D1 既存行は残るが UI には terass_* 経由で表示する。
   const allSites: SiteId[] = ['homes', 'fudosan', 'chintai', 'smaity', 'kenbiya', 'rakumachi', 'terass_reins', 'terass_suumo', 'terass_athome'];
-  const siteCountRows = await db
-    .prepare(`SELECT site_id, COUNT(*) as cnt FROM properties p ${whereSQL} GROUP BY site_id`)
-    .bind(...bindings)
-    .all<{ site_id: SiteId; cnt: number }>();
-
   const siteCounts = new Map((siteCountRows.results ?? []).map(r => [r.site_id, r.cnt]));
+  // サイト件数の合計を total として使用 (別途 COUNT(*) クエリ不要)
+  const total = Array.from(siteCounts.values()).reduce((a, b) => a + b, 0);
   const siteResults = allSites.map(siteId => ({
     siteId,
     count: siteCounts.get(siteId) ?? 0,

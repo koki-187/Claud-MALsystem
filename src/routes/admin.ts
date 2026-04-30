@@ -425,14 +425,14 @@ admin.post('/import/session/complete', async (c) => {
     const m = CAT_MAP[key]!;
     const candRow = await safeFirst<{ cnt: number }>(db.prepare(`
       SELECT COUNT(*) as cnt FROM properties
-      WHERE site_id LIKE 'terass_%'
+      WHERE site_id IN ('terass_reins', 'terass_suumo', 'terass_athome')
         AND property_type = ?
         AND status = 'active'
         AND (import_session_id IS NULL OR import_session_id != ?)
     `).bind(m.property_type, sessionId));
     const totalRow = await safeFirst<{ cnt: number }>(db.prepare(`
       SELECT COUNT(*) as cnt FROM properties
-      WHERE site_id LIKE 'terass_%'
+      WHERE site_id IN ('terass_reins', 'terass_suumo', 'terass_athome')
         AND property_type = ?
         AND status = 'active'
     `).bind(m.property_type));
@@ -477,7 +477,7 @@ admin.post('/import/session/complete', async (c) => {
     const r = await db.prepare(`
       UPDATE properties
       SET status='delisted', sold_at=datetime('now'), updated_at=datetime('now')
-      WHERE site_id LIKE 'terass_%'
+      WHERE site_id IN ('terass_reins', 'terass_suumo', 'terass_athome')
         AND property_type = ?
         AND status = 'active'
         AND (import_session_id IS NULL OR import_session_id != ?)
@@ -531,7 +531,7 @@ admin.post('/import', async (c) => {
 
   function parseRow(line: string): Record<string, string> {
     const result: Record<string, string> = {};
-    const fields = line.match(/("(?:[^"]|"")*"|[^,]*)/g) ?? [];
+    const fields = line.match(/("(?:[^"]|"")*"|[^,]+)/g) ?? [];
     headerLine.forEach((col, i) => {
       const raw = (fields[i] ?? '').trim();
       result[col] = raw.startsWith('"') ? raw.slice(1, -1).replace(/""/g, '"') : raw;

@@ -104,7 +104,8 @@ app.get('/api/search', async (c) => {
   };
 
   try {
-    const cacheKey = `search:${new URLSearchParams(q).toString()}`;
+    const sortedQ = Object.fromEntries(Object.entries(q).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)));
+    const cacheKey = `search:${new URLSearchParams(sortedQ as Record<string, string>).toString()}`;
     const cached = await c.env.MAL_CACHE.get(cacheKey, 'json').catch(() => null);
     if (cached) return c.json({ ...(cached as object), cacheHit: true });
 
@@ -411,8 +412,8 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
         mb = ((cap?.n ?? 0) * 635) / 1024 / 1024;
         source = 'estimated';
       }
-      if (mb >= 400) {
-        console.error(`[D1-CAPACITY-ALERT] ${mb.toFixed(0)}MB >= 400MB (80% of 500MB free tier, source=${source}) — starting auto-archive`);
+      if (mb >= 4096) {
+        console.error(`[D1-CAPACITY-ALERT] ${mb.toFixed(0)}MB >= 4096MB (80% of 5GB free tier, source=${source}) — starting auto-archive`);
         const result = await archiveOldestCold(env, 5, 2000, 30);
         console.log(`[D1-AUTO-ARCHIVE] archived=${result.archived} deleted=${result.deleted} keys=${result.r2Keys.length}`);
       }

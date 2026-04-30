@@ -151,16 +151,12 @@ async function fetchListingPage(url) {
 }
 
 // プロパティ配列をCSVテキストに変換 (camelCase → snake_case)
-// Note: Worker の CSV パーサーは regex バグで各値の後に空文字列を追加するため、
-// ヘッダーを 2倍 (実列+ダミー列) にしてデータ行の各値が正しい列にマップされるよう補正する
 function propertiesToCsv(properties) {
   const CSV_COLS = ['site_id','site_property_id','title','property_type','status',
     'prefecture','city','address','price','price_text','area','rooms','age','floor',
     'station','station_minutes','management_fee','repair_fund','direction','structure',
     'yield_rate','thumbnail_url','detail_url','description','fingerprint',
     'latitude','longitude','listed_at','sold_at'];
-  // ヘッダーを2倍にして偶数インデックスに実列名を配置 (奇数はダミー)
-  const doubledHeaders = CSV_COLS.flatMap(col => [col, `_${col}`]);
   const esc = v => {
     if (v === null || v === undefined || v === '') return '';
     const s = String(v);
@@ -172,7 +168,33 @@ function propertiesToCsv(properties) {
     return p[col] !== undefined ? p[col] : p[camel];
   };
   const rows = properties.map(p => CSV_COLS.map(col => esc(getField(p, col))).join(','));
-  return doubledHeaders.join(',') + '\n' + rows.join('\n');
+  return CSV_COLS.join(',') + '\n' + rows.join('\n');
+}
+
+async function importBatch(properties, batchIdx) {
+  const csvText = propertiesToCsv(properties);
+  try {
+    const form = new FormData();
+    form.append('file', new File([csvText], 'rakumachi.csv', { type: 'text/csv' }));
+    const resp = await fetch(IMPORT_URL, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${ADMIN_SECRET}` },
+      body: form,
+      signal: AbortSignal.timeout(55000),
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      log(`WARNING: batch ${batchIdx} import failed HTTP ${resp.status}: ${text.slice(0, 300)}`);
+      return { imported: 0, skipped: 0 };
+    }
+    const result = await resp.json();
+    const imported = result.imported ?? result.imported_rows ?? result.importedRows ?? 0;
+    const skipped = result.skipped ?? result.skipped_rows ?? result.skippedRows ?? 0;
+    return { imported, skipped };
+  } catch (e) {
+    log(`ERROR: batch ${batchIdx}: ${e.message}`);
+    return { imported: 0, skipped: 0 };
+  }
 }
 
 async function importToWorker(properties) {
@@ -182,28 +204,23 @@ async function importToWorker(properties) {
     return { imported: properties.length, skipped: 0 };
   }
 
-  // CSV形式でmultipart/form-dataとして送信 (Worker の /api/admin/import エンドポイント対応)
-  const csvText = propertiesToCsv(properties);
-  try {
-    const form = new FormData();
-    form.append('file', new File([csvText], 'rakumachi.csv', { type: 'text/csv' }));
-    const resp = await fetch(IMPORT_URL, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${ADMIN_SECRET}` },
-      body: form,
-      signal: AbortSignal.timeout(60000),
-    });
-    if (!resp.ok) {
-      const text = await resp.text();
-      log(`WARNING: import failed HTTP ${resp.status}: ${text.slice(0, 300)}`);
-      return { imported: 0, skipped: 0 };
+  // バッチサイズ100件に分割して送信 (Workerの60秒タイムアウト対策)
+  const BATCH_SIZE = 100;
+  let totalImported = 0, totalSkipped = 0;
+  for (let i = 0; i < properties.length; i += BATCH_SIZE) {
+    const batch = properties.slice(i, i + BATCH_SIZE);
+    const batchIdx = Math.floor(i / BATCH_SIZE) + 1;
+    const total = Math.ceil(properties.length / BATCH_SIZE);
+    log(`  バッチ ${batchIdx}/${total}: ${batch.length}件送信中...`);
+    const { imported, skipped } = await importBatch(batch, batchIdx);
+    totalImported += imported;
+    totalSkipped += skipped;
+    log(`  バッチ ${batchIdx}/${total}: imported=${imported} skipped=${skipped}`);
+    if (i + BATCH_SIZE < properties.length) {
+      await new Promise(r => setTimeout(r, 1000));
     }
-    const result = await resp.json();
-    return { imported: result.imported ?? result.imported_rows ?? 0, skipped: result.skipped ?? result.skipped_rows ?? 0 };
-  } catch (e) {
-    log(`ERROR: import: ${e.message}`);
-    return { imported: 0, skipped: 0 };
   }
+  return { imported: totalImported, skipped: totalSkipped };
 }
 
 async function main() {
