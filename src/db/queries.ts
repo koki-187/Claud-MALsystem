@@ -125,8 +125,13 @@ export async function searchProperties(
 
   const properties: Property[] = (rows.results ?? []).map(rowToProperty);
 
-  // suumo / athome / reins の直接スクレイパーは削除済み。D1 既存行は残るが UI には terass_* 経由で表示する。
-  const allSites: SiteId[] = ['homes', 'fudosan', 'chintai', 'smaity', 'kenbiya', 'rakumachi', 'terass_reins', 'terass_suumo', 'terass_athome'];
+  // ローカルスクレイパー収集分 (suumo_chintai/baibai) + terass集計分 + 直接スクレイパー分
+  const allSites: SiteId[] = [
+    'terass_suumo', 'terass_reins', 'terass_athome',
+    'suumo_baibai', 'suumo_chintai',
+    'kenbiya', 'rakumachi', 'chintai',
+    'homes', 'fudosan', 'smaity',
+  ];
   const siteCounts = new Map((siteCountRows.results ?? []).map(r => [r.site_id, r.cnt]));
   // サイト件数の合計を total として使用 (別途 COUNT(*) クエリ不要)
   const total = Array.from(siteCounts.values()).reduce((a, b) => a + b, 0);
