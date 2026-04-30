@@ -5,6 +5,39 @@
 
 ---
 
+## 2026-04-30 13:00 (Desktop) セッション4 — 100万件DB構築 全5スクレイパー並列インポート開始
+
+- **環境**: Desktop
+- **ブランチ**: master (commit a88f7c4)
+- **変更内容**:
+  1. **5本の新規スクレイパー作成・テスト・本番インポート開始**:
+     - `scrape-suumo-local.mjs`: SUUMO賃貸+売買 全47都道府県 Playwright版 (site_id: suumo_chintai/suumo_baibai)
+     - `scrape-homes-all-local.mjs`: HOME'S 全6カテゴリ×47都道府県 Playwright版
+     - `scrape-kenbiya-full-local.mjs`: 健美家 全47都道府県 fetch版 (45件/page確認済み✅)
+     - `scrape-rakumachi-full-local.mjs`: 楽待 全47都道府県 fetch版 (47件/page確認済み✅)
+     - `scrape-chintai-full-local.mjs`: CHINTAI 全47都道府県 fetch版 (23件/page確認済み✅)
+  2. **バグ修正**:
+     - kenbiyaパーサー完全書き直し (prop_block/main/price CSS class対応)
+     - chintaiパーサー追加 parseChintaiPageNew() section-based実装
+     - 全8スクレイパーのCSVエスケープに \r 除去追加 (column misalignment防止)
+     - D1 DB内の不正site_idレコード2件削除 (CSV escaping bug由来)
+  3. **Worker改善**:
+     - src/types/index.ts: suumo_chintai / suumo_baibai site ID追加
+     - wrangler.toml: MAX_RESULTS_PER_SITE 15→50
+  4. **一括実行バッチ作成**: run-all-scrapers.bat / test-all-scrapers-dryrun.bat
+- **デプロイ**: ⏳ 未 (wrangler deploy 要実行 — suumo_chintai/baibai UI表示のため)
+- **git**: push 済み (a88f7c4 → master)
+- **インポート状況** (13:00時点, 並列実行中):
+  - 開始前: 457,709件 → 現在: ~459,165件 (+1,456件/数分)
+  - kenbiya: 3,565 → 4,155 (+590) ✅実行中
+  - rakumachi: 2,178 → 2,727 (+549) ✅実行中
+  - suumo_chintai: 0 → 319 (+319) ✅実行中 (NEW)
+  - chintai/homes-all: 実行中
+- **次のタスク**:
+  1. 全スクレイパー完了後 SUUMO売買(--mode=baibai)も追加実行
+  2. wrangler deploy (suumo_chintai/baibai UI表示対応)
+  3. DB 1,000,000件達成確認
+
 ## 2026-04-30 (Desktop) セッション3 — 5バグ修正デプロイ + HOME'S スクレイピング完了
 
 - **環境**: Desktop
