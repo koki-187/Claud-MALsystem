@@ -220,16 +220,7 @@ app.get('/api/health', (c) => c.json({
   sites: Object.keys(SITES).length,
 }));
 
-app.get('/api/scrape/status', async (c) => {
-  try {
-    const jobs = await c.env.MAL_DB
-      .prepare('SELECT * FROM scrape_jobs ORDER BY started_at DESC LIMIT 20')
-      .all();
-    return c.json({ jobs: jobs.results ?? [] });
-  } catch {
-    return c.json({ jobs: [] });
-  }
-});
+// /api/scrape/status は admin ルートに移動済み (admin.ts で定義)
 
 
 app.get('/manifest.json', (c) => c.json({

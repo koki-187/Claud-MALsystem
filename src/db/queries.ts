@@ -49,8 +49,14 @@ export async function searchProperties(
     bindings.push(params.areaMax);
   }
   if (params.rooms) {
-    whereClauses.push('p.rooms = ?');
-    bindings.push(params.rooms);
+    const roomList = params.rooms.split(',').map(r => r.trim()).filter(Boolean);
+    if (roomList.length === 1) {
+      whereClauses.push('p.rooms = ?');
+      bindings.push(roomList[0]);
+    } else if (roomList.length > 1) {
+      whereClauses.push(`p.rooms IN (${roomList.map(() => '?').join(',')})`);
+      bindings.push(...roomList);
+    }
   }
   if (params.ageMax !== undefined) {
     whereClauses.push('(p.age IS NULL OR p.age <= ?)');
@@ -301,8 +307,14 @@ export async function searchMasters(
     bindings.push(params.areaMax);
   }
   if (params.rooms) {
-    whereClauses.push('m.rooms = ?');
-    bindings.push(params.rooms);
+    const roomList = params.rooms.split(',').map(r => r.trim()).filter(Boolean);
+    if (roomList.length === 1) {
+      whereClauses.push('m.rooms = ?');
+      bindings.push(roomList[0]);
+    } else if (roomList.length > 1) {
+      whereClauses.push(`m.rooms IN (${roomList.map(() => '?').join(',')})`);
+      bindings.push(...roomList);
+    }
   }
   if (params.ageMax !== undefined) {
     whereClauses.push('(m.age IS NULL OR m.age <= ?)');

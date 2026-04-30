@@ -1279,4 +1279,17 @@ admin.post('/master/:id/favorite', async (c) => {
   return c.json({ ok: true, id, favorite: body.favorite });
 });
 
+// スクレイプ実行状況 (admin 認証必須)
+admin.get('/scrape/status', async (c) => {
+  const env = c.env;
+  try {
+    const jobs = await env.MAL_DB
+      .prepare('SELECT * FROM scrape_jobs ORDER BY started_at DESC LIMIT 20')
+      .all();
+    return c.json({ jobs: jobs.results ?? [] });
+  } catch {
+    return c.json({ jobs: [] });
+  }
+});
+
 export { admin };
