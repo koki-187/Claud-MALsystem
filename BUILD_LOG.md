@@ -25,12 +25,18 @@
   3. **実データ収集完了**:
      - 楽待: 982件
      - 健美家 + 不動産ジャパン: 3,955件 (計 4,937件 新規インポート)
-- **デプロイ**: ⏳ `_deploy.bat` ダブルクリック実行中 (commit 852d1fe)
-- **git**: push 済み (852d1fe → master)
-- **次のタスク**:
-  1. ✅ 楽待・健美家・不動産Japan 実データ収集完了
-  2. ⚠️ デプロイ確認 (`_deploy.bat` 実行中 → wrangler deploy 完了確認)
-  3. 検索UIの動作確認 (3モード切替・実データ表示)
+- **デプロイ**: ✅ 済 — Version ID: 50d0da6d-5259-40a7-95c6-7d7f45eaea63
+  - Exit Code: 0、全コミット (852d1fe, 332bb25) 反映済み
+  - 新 cron スケジュール (30 * * * *) 確認済み
+- **git**: push 済み (332bb25 → master)
+- **動作確認**:
+  - `?rooms=1LDK,2LDK&prefecture=13` → 2,912件 ✅ (多間取り選択 IN句 動作確認)
+  - 全サイト合計 362,334件 active 表示中
+- **残課題** (launch後対応):
+  - smaity: 0件 (Worker IPブロック + ページ構造がトップページ) → ローカルスクレイパー化が必要
+  - homes: 37件 (同上) → ローカルスクレイパー化
+  - fingerprint: 32bit hash (4% collision risk at scale) → 64bit 化
+  - image pipeline: N+1 D1クエリ → batch化
 
 ---
 
