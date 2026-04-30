@@ -199,7 +199,9 @@ app.get('/api/search/master', async (c) => {
   };
 
   try {
-    const cacheKey = `master:${new URLSearchParams(q).toString()}`;
+    // Sort params for stable cache key (same as /api/search)
+    const sortedQ = Object.fromEntries(Object.entries(q).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)));
+    const cacheKey = `master:${new URLSearchParams(sortedQ as Record<string, string>).toString()}`;
     const cached = await c.env.MAL_CACHE.get(cacheKey, 'json').catch(() => null);
     if (cached) return c.json({ ...(cached as object), cacheHit: true });
 

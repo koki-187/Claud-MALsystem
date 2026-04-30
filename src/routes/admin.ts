@@ -529,12 +529,32 @@ admin.post('/import', async (c) => {
   const headerLine = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
   const colIdx = (name: string) => headerLine.indexOf(name);
 
+  // Proper CSV field splitter — handles empty fields (,,) and quoted strings with commas/newlines
+  function splitCsvFields(line: string): string[] {
+    const fields: string[] = [];
+    let inQuote = false;
+    let current = '';
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuote && line[i + 1] === '"') { current += '"'; i++; } // escaped quote ""
+        else { inQuote = !inQuote; }
+      } else if (ch === ',' && !inQuote) {
+        fields.push(current.trim());
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+    fields.push(current.trim()); // last field
+    return fields;
+  }
+
   function parseRow(line: string): Record<string, string> {
     const result: Record<string, string> = {};
-    const fields = line.match(/("(?:[^"]|"")*"|[^,]+)/g) ?? [];
+    const fields = splitCsvFields(line);
     headerLine.forEach((col, i) => {
-      const raw = (fields[i] ?? '').trim();
-      result[col] = raw.startsWith('"') ? raw.slice(1, -1).replace(/""/g, '"') : raw;
+      result[col] = fields[i] ?? '';
     });
     return result;
   }
