@@ -136,6 +136,9 @@ export interface SearchParams {
   stationMinutes?: number;
   yieldMin?: number;                // 利回り下限
   managementFeeMax?: number;        // 管理費上限
+  repairFundMax?: number;           // 修繕積立金上限
+  direction?: string;               // 向き (南向き等)
+  structure?: string;               // 構造 (RC造等)
   sites?: SiteId[];
   hideDuplicates?: boolean;         // クロスサイト重複を非表示
   sortBy?: 'price_asc' | 'price_desc' | 'area_asc' | 'area_desc' | 'newest' | 'relevance' | 'yield_desc';

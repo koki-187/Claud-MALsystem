@@ -96,6 +96,10 @@ app.get('/api/search', async (c) => {
     ageMax: q.age_max ? parseInt(q.age_max) : undefined,
     stationMinutes: q.station_min ? parseInt(q.station_min) : undefined,
     yieldMin: q.yield_min ? parseFloat(q.yield_min) : undefined,
+    managementFeeMax: q.management_fee_max ? parseInt(q.management_fee_max) : undefined,
+    repairFundMax: q.repair_fund_max ? parseInt(q.repair_fund_max) : undefined,
+    direction: q.direction || undefined,
+    structure: q.structure || undefined,
     sites: q.sites ? (q.sites.split(',') as any) : undefined,
     hideDuplicates: q.hide_duplicates === '1' ? true : (q.hide_duplicates === '0' ? false : undefined),
     sortBy: q.sort as any,
@@ -240,13 +244,22 @@ app.get('/manifest.json', (c) => c.json({
 
 app.get('/api/suggest', async (c) => {
   const q = c.req.query('q') ?? '';
-  if (!q) return c.json({ suggestions: [] });
+  if (!q || q.length < 2) return c.json({ suggestions: [] });
   try {
-    const rows = await c.env.MAL_DB
-      .prepare("SELECT DISTINCT city FROM properties WHERE city LIKE ? AND status = 'active' LIMIT 10")
-      .bind(`%${q}%`)
-      .all<{ city: string }>();
-    return c.json({ suggestions: rows.results?.map(r => r.city) ?? [] });
+    const like = `%${q}%`;
+    const [cities, stations] = await Promise.all([
+      c.env.MAL_DB
+        .prepare("SELECT DISTINCT city as val FROM properties WHERE city LIKE ? AND status='active' LIMIT 7")
+        .bind(like).all<{ val: string }>(),
+      c.env.MAL_DB
+        .prepare("SELECT DISTINCT station as val FROM properties WHERE station LIKE ? AND status='active' AND station IS NOT NULL LIMIT 5")
+        .bind(like).all<{ val: string }>(),
+    ]);
+    const suggestions = [
+      ...(cities.results ?? []).map(r => r.val),
+      ...(stations.results ?? []).map(r => r.val),
+    ].filter(Boolean);
+    return c.json({ suggestions });
   } catch {
     return c.json({ suggestions: [] });
   }
@@ -352,7 +365,23 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
         const archived = await archiveOldestCold(env, 5, 2000, 30);
         console.log(`[daily-cleanup] archiveOldestCold: archived=${archived.archived} deleted=${archived.deleted} keys=${archived.r2Keys.length}`);
 
-        // 3. VACUUM on the 1st of each month (best-effort; may exceed 30s CPU limit)
+        // 3. 掲載落ち自動検知: last_seen_at が 30日以上前の active 物件を delisted に変更
+        try {
+          const staleResult = await env.MAL_DB.prepare(`
+            UPDATE properties SET status = 'delisted', updated_at = datetime('now')
+            WHERE status = 'active'
+              AND last_seen_at IS NOT NULL
+              AND last_seen_at < datetime('now', '-30 days')
+          `).run();
+          const staleCount = (staleResult.meta?.changes as number | undefined) ?? 0;
+          if (staleCount > 0) {
+            console.log(`[daily-cleanup] mark-delisted: ${staleCount}件を掲載落ちとしてマーク`);
+          }
+        } catch (staleErr) {
+          console.warn('[daily-cleanup] mark-delisted error:', staleErr);
+        }
+
+        // 4. VACUUM on the 1st of each month (best-effort; may exceed 30s CPU limit)
         if (scheduledDate.getUTCDate() === 1) {
           try {
             await env.MAL_DB.exec('VACUUM');
@@ -458,6 +487,7 @@ function getHTML(): string {
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌎</text></svg>">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.min.css" crossorigin="anonymous">
   <style>
 /* ==========================================
    MAL v6.0 — Design System
@@ -1321,6 +1351,61 @@ details[open] .accordion-arrow { transform: rotate(180deg); }
 .field-input.has-error { border-color: var(--c-danger) !important; }
 .field-error { font-size: 11px; color: var(--c-danger); margin-top: 3px; font-weight: 600; }
 
+/* ── Map View ── */
+.leaflet-popup-content-wrapper { border-radius: 10px !important; box-shadow: var(--shadow-md) !important; }
+.map-popup-title { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+.map-popup-price { font-size: 15px; font-weight: 900; color: var(--c-primary); }
+.map-popup-spec { font-size: 11px; color: #64748b; margin-top: 2px; }
+.map-popup-link { display: inline-block; margin-top: 6px; font-size: 11px; font-weight: 700; color: var(--c-primary); }
+
+/* ── Price History Mini Chart ── */
+.price-history-chart {
+  display: flex; align-items: flex-end; gap: 3px;
+  height: 48px; margin: 8px 0 4px;
+}
+.price-bar {
+  flex: 1; min-width: 6px;
+  background: var(--c-primary);
+  border-radius: 3px 3px 0 0;
+  opacity: .75; cursor: pointer;
+  transition: opacity var(--transition);
+  position: relative;
+}
+.price-bar:hover { opacity: 1; }
+.price-bar-tip {
+  position: absolute; bottom: calc(100% + 4px); left: 50%;
+  transform: translateX(-50%);
+  background: var(--c-text); color: var(--c-bg);
+  font-size: 10px; font-weight: 700;
+  padding: 3px 6px; border-radius: 4px;
+  white-space: nowrap; display: none; z-index: 10;
+}
+.price-bar:hover .price-bar-tip { display: block; }
+
+/* ── Favorites ── */
+.fav-btn {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: var(--c-surface); border: 1.5px solid var(--c-border);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; cursor: pointer;
+  transition: all var(--transition); flex-shrink: 0;
+}
+.fav-btn:hover { border-color: #e11d48; background: #fff0f3; }
+.fav-btn.active { background: #e11d48; border-color: #e11d48; color: #fff; }
+
+/* ── Scroll To Top ── */
+.scroll-top-btn {
+  position: fixed; bottom: 80px; right: 20px; z-index: 500;
+  width: 44px; height: 44px; border-radius: 50%;
+  background: var(--c-primary); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; box-shadow: var(--shadow-md);
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--transition), transform var(--transition);
+}
+.scroll-top-btn.visible { opacity: 1; pointer-events: auto; }
+.scroll-top-btn:hover { transform: translateY(-3px); }
+
   </style>
 </head>
 <body class="page-wrap">
@@ -1652,6 +1737,62 @@ details[open] .accordion-arrow { transform: rotate(180deg); }
       </div>
     </div>
 
+    <!-- 高度フィルター (購入モード・詳細条件) -->
+    <div id="advancedFilters" style="margin-top:14px">
+      <details style="background:var(--c-bg2);border:1px solid var(--c-border);border-radius:var(--radius-sm)">
+        <summary style="list-style:none;cursor:pointer;padding:10px 14px;font-size:13px;font-weight:700;color:var(--c-text2);display:flex;align-items:center;gap:8px;user-select:none">
+          <i class="fas fa-sliders-h" style="color:var(--c-primary)"></i>
+          詳細条件
+          <i class="fas fa-chevron-down accordion-arrow" style="margin-left:auto;font-size:11px;color:var(--c-text4)"></i>
+        </summary>
+        <div style="padding:14px;border-top:1px solid var(--c-border)">
+          <div class="search-grid2">
+            <div>
+              <div class="field-label">管理費 上限
+                <span class="term-help" tabindex="0" data-tip="マンション等で月々支払う共用部の維持費。管理費0円の場合は表示されないことがあります。">?</span>
+              </div>
+              <div class="range-row">
+                <input type="number" id="managementFeeMax" placeholder="例: 20000" class="field-input" min="0" step="1000">
+                <span class="range-sep">円以下/月</span>
+              </div>
+            </div>
+            <div>
+              <div class="field-label">修繕積立金 上限
+                <span class="term-help" tabindex="0" data-tip="将来の大規模修繕に備えて毎月積み立てる費用。築年数が古いと高くなる傾向。">?</span>
+              </div>
+              <div class="range-row">
+                <input type="number" id="repairFundMax" placeholder="例: 15000" class="field-input" min="0" step="1000">
+                <span class="range-sep">円以下/月</span>
+              </div>
+            </div>
+            <div>
+              <div class="field-label">向き</div>
+              <select id="directionFilter" class="field-input">
+                <option value="">すべて</option>
+                <option value="南">南向き</option>
+                <option value="南東">南東向き</option>
+                <option value="南西">南西向き</option>
+                <option value="東">東向き</option>
+                <option value="西">西向き</option>
+                <option value="北">北向き</option>
+              </select>
+            </div>
+            <div>
+              <div class="field-label">構造</div>
+              <select id="structureFilter" class="field-input">
+                <option value="">すべて</option>
+                <option value="RC">RC造（鉄筋コンクリート）</option>
+                <option value="SRC">SRC造（鉄骨鉄筋コンクリート）</option>
+                <option value="鉄骨">鉄骨造</option>
+                <option value="木造">木造</option>
+                <option value="軽量鉄骨">軽量鉄骨造</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </details>
+    </div>
+
     <!-- Sites Accordion -->
     <details class="sites-accordion" id="sitesAccordion">
       <summary>
@@ -1705,6 +1846,7 @@ details[open] .accordion-arrow { transform: rotate(180deg); }
   <!-- Tab Bar -->
   <div class="tab-bar">
     <button class="tab-btn active" id="tabProperties" onclick="switchTab('properties')">🏠 物件一覧</button>
+    <button class="tab-btn" id="tabMap" onclick="switchTab('map')" title="検索結果を地図上に表示">🗺️ 地図</button>
     <button class="tab-btn" id="tabTransactions" onclick="switchTab('transactions')" title="成約事例 = 過去に売買が成立した物件の取引価格データ。相場感の参考に使えます。">📋 成約事例</button>
   </div>
 
@@ -1748,6 +1890,12 @@ details[open] .accordion-arrow { transform: rotate(180deg); }
 
   <!-- Pagination -->
   <div id="pagination" class="pagination"></div>
+
+  <!-- Map Panel -->
+  <div id="mapPanel" class="hidden">
+    <div id="propertyMap" style="height:520px;border-radius:var(--radius);border:1px solid var(--c-border);overflow:hidden"></div>
+    <div id="mapNoteBar" style="font-size:12px;color:var(--c-text3);margin-top:8px;text-align:center">地図は緯度経度情報がある物件のみ表示します（最大500件）</div>
+  </div>
 
   <!-- Transactions Panel -->
   <div id="transactionsPanel" class="hidden">
@@ -1797,6 +1945,11 @@ details[open] .accordion-arrow { transform: rotate(180deg); }
   </div>
 
 </main>
+
+<!-- =================== SCROLL TO TOP =================== -->
+<button class="scroll-top-btn" id="scrollTopBtn" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="トップへ戻る" aria-label="ページトップへ">
+  <i class="fas fa-arrow-up"></i>
+</button>
 
 <!-- =================== SNACKBAR =================== -->
 <div class="snackbar" id="snackbar">
@@ -2252,6 +2405,12 @@ async function doSearch(page) {
     if (sortBy === 'newest') sortBy = 'yield_desc';
   }
 
+  // 詳細条件フィルター
+  var managementFeeMax = (document.getElementById('managementFeeMax') as HTMLInputElement)?.value || '';
+  var repairFundMax    = (document.getElementById('repairFundMax') as HTMLInputElement)?.value || '';
+  var direction        = (document.getElementById('directionFilter') as HTMLSelectElement)?.value || '';
+  var structure        = (document.getElementById('structureFilter') as HTMLSelectElement)?.value || '';
+
   if (query) q.set('q', query);
   if (pref) q.set('prefecture', pref);
   if (type) q.set('type', type);
@@ -2264,6 +2423,10 @@ async function doSearch(page) {
   if (rooms) q.set('rooms', rooms);
   if (stationMin) q.set('station_min', stationMin);
   if (ageMax) q.set('age_max', ageMax);
+  if (managementFeeMax) q.set('management_fee_max', managementFeeMax);
+  if (repairFundMax) q.set('repair_fund_max', repairFundMax);
+  if (direction) q.set('direction', direction);
+  if (structure) q.set('structure', structure);
   if (hideDuplicates) q.set('hide_duplicates', '1');
   var totalSites = Object.keys(SITES_DATA).length;
   if (sites.length > 0 && sites.length < totalSites) q.set('sites', sites.join(','));
@@ -2519,14 +2682,21 @@ function renderModal(p) {
 
   var desc = p.description ? '<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;color:var(--c-text3);letter-spacing:.04em;margin-bottom:6px">物件説明</div><p style="font-size:13px;color:var(--c-text2);line-height:1.7">' + escHtml(p.description) + '</p></div>' : '';
 
+  var priceHistoryHtml = buildPriceHistoryChart(p.priceHistory);
+  var favActive = isFavorite(p.id);
+
   document.getElementById('modalContent').innerHTML =
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">'
     + '<span class="prop-badge-site" style="position:static;background:' + color + ';font-size:12px">' + (site.logo||'') + ' ' + escHtml(site.name||p.siteId) + '</span>'
-    + '<button class="modal-close" onclick="closeModal()">&times;</button></div>'
+    + '<div style="display:flex;align-items:center;gap:8px">'
+    + '<button class="fav-btn' + (favActive ? ' active' : '') + '" data-fav-id="' + escAttr(p.id) + '" onclick="toggleFavorite(\'' + escAttr(p.id) + '\',\'' + escAttr(p.title) + '\')" title="' + (favActive ? 'お気に入り解除' : 'お気に入り追加') + '">❤️</button>'
+    + '<button class="modal-close" onclick="closeModal()">&times;</button>'
+    + '</div></div>'
     + (isSold ? '<div class="sold-banner"><i class="fas fa-lock mr-2"></i>この物件は売却済みです</div>' : '')
     + gallery
     + '<h2 style="font-size:18px;font-weight:800;margin-bottom:8px">' + escHtml(p.title) + '</h2>'
     + '<div style="font-size:26px;font-weight:900;margin-bottom:8px;color:' + (isSold ? 'var(--c-text3)' : color) + '">' + (isSold ? '<span style="text-decoration:line-through">' : '') + escHtml(priceStr) + (isSold ? '</span>' : '') + '</div>'
+    + priceHistoryHtml
     + feesHtml
     + detailGrid
     + floorPlanHtml
@@ -2734,12 +2904,37 @@ function escAttr(s) {
   return (/^https?:\\/\\//i.test(safe) || safe.startsWith('/') || safe === '#') ? safe : '#';
 }
 
-// ── CSV Export ──
+// ── CSV Export (検索結果から生成) ──
 function exportCSV() {
-  var params = new URLSearchParams(window.location.search);
-  var pref = params.get('prefecture') || document.getElementById('prefecture').value || '13';
-  var url = '/api/admin/export.csv?prefecture=' + encodeURIComponent(pref) + '&status=active';
-  window.location.href = url;
+  var props = currentResults && currentResults.properties;
+  if (!props || props.length === 0) {
+    showSnackbar('先に検索を実行してください', null);
+    return;
+  }
+  var BOM = '﻿'; // Excel対応BOM (UTF-8)
+  var cols = ['id','siteId','title','propertyType','status','prefecture','city','address',
+    'price','priceText','area','rooms','age','floor','station','stationMinutes',
+    'managementFee','repairFund','direction','structure','yieldRate',
+    'thumbnailUrl','detailUrl','latitude','longitude','scrapedAt'];
+  var esc = function(v) {
+    if (v === null || v === undefined) return '';
+    var s = String(v);
+    return (s.includes(',') || s.includes('"') || s.includes('\n'))
+      ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  var rows = [cols.join(',')].concat(props.map(function(p) {
+    return cols.map(function(c) { return esc(p[c]); }).join(',');
+  }));
+  var csv = BOM + rows.join('\n');
+  var blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'mal_' + new Date().toISOString().slice(0,10) + '_' + props.length + '件.csv';
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function() { URL.revokeObjectURL(url); a.remove(); }, 1000);
+  showSnackbar(props.length + '件のCSVをダウンロードしました', null);
 }
 
 // ── Tab Switching ──
@@ -2747,6 +2942,7 @@ var currentTab = 'properties';
 function switchTab(tab) {
   currentTab = tab;
   document.getElementById('tabProperties').classList.toggle('active', tab === 'properties');
+  document.getElementById('tabMap').classList.toggle('active', tab === 'map');
   document.getElementById('tabTransactions').classList.toggle('active', tab === 'transactions');
 
   var propEls = ['resultsBar', 'siteSummary', 'loadingState', 'resultsContainer', 'pagination', 'emptyState', 'initialState'];
@@ -2769,6 +2965,12 @@ function switchTab(tab) {
     }
   });
 
+  var mapPanel = document.getElementById('mapPanel');
+  mapPanel.classList.toggle('hidden', tab !== 'map');
+  if (tab === 'map') {
+    initMapView();
+  }
+
   var txPanel = document.getElementById('transactionsPanel');
   txPanel.classList.toggle('hidden', tab !== 'transactions');
 
@@ -2777,6 +2979,149 @@ function switchTab(tab) {
     loadTransactions(pref);
   }
 }
+
+// ── Map View (Leaflet.js) ──
+var _mapInstance = null;
+var _mapScriptLoaded = false;
+function initMapView() {
+  if (!currentResults || !currentResults.properties) return;
+  var props = currentResults.properties.filter(function(p) {
+    return p.latitude && p.longitude;
+  }).slice(0, 500); // 最大500件
+
+  var noteBar = document.getElementById('mapNoteBar');
+  if (noteBar) noteBar.textContent = '地図に表示: ' + props.length + '件 (緯度経度あり) / 全' + (currentResults.total || 0) + '件';
+
+  function renderMap() {
+    var L = (window as any).L;
+    if (!L) return;
+    var mapEl = document.getElementById('propertyMap');
+    if (!mapEl) return;
+
+    // 既存マップを破棄
+    if (_mapInstance) {
+      try { _mapInstance.remove(); } catch(e) {}
+      _mapInstance = null;
+    }
+
+    if (props.length === 0) {
+      mapEl.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--c-text3);font-size:14px">緯度経度情報がある物件がありません</div>';
+      return;
+    }
+
+    // 中心座標を平均で計算
+    var avgLat = props.reduce(function(s, p) { return s + p.latitude; }, 0) / props.length;
+    var avgLng = props.reduce(function(s, p) { return s + p.longitude; }, 0) / props.length;
+
+    _mapInstance = L.map('propertyMap').setView([avgLat, avgLng], 11);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 19,
+    }).addTo(_mapInstance);
+
+    // マーカー追加
+    props.forEach(function(p) {
+      var site = SITES_DATA[p.siteId] || {};
+      var priceStr = p.price ? p.price.toLocaleString() + '万円' : (p.priceText || '価格要相談');
+      var popup = L.popup({ maxWidth: 260 }).setContent(
+        '<div class="map-popup-title">' + escHtml(p.title) + '</div>'
+        + '<div class="map-popup-price">' + escHtml(priceStr) + '</div>'
+        + '<div class="map-popup-spec">'
+        + (p.rooms ? p.rooms + ' / ' : '')
+        + (p.area ? p.area + 'm² / ' : '')
+        + (p.age !== null && p.age !== undefined ? '築' + p.age + '年' : '')
+        + '</div>'
+        + '<a class="map-popup-link" href="#" onclick="event.preventDefault();switchTab(\'properties\');showDetail(\'' + escAttr(p.id) + '\')">'
+        + '詳細を見る →</a>'
+      );
+      var color = site.color || '#2563eb';
+      var icon = L.divIcon({
+        className: '',
+        html: '<div style="background:' + color + ';width:12px;height:12px;border-radius:50%;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div>',
+        iconSize: [12, 12],
+        iconAnchor: [6, 6],
+      });
+      L.marker([p.latitude, p.longitude], { icon: icon }).bindPopup(popup).addTo(_mapInstance);
+    });
+
+    // フィット
+    try {
+      var bounds = L.latLngBounds(props.map(function(p) { return [p.latitude, p.longitude]; }));
+      _mapInstance.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+    } catch(e) {}
+  }
+
+  if (!_mapScriptLoaded) {
+    var s = document.createElement('script');
+    s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.min.js';
+    s.crossOrigin = 'anonymous';
+    s.onload = function() { _mapScriptLoaded = true; renderMap(); };
+    document.head.appendChild(s);
+  } else {
+    renderMap();
+  }
+}
+
+// ── Favorites (localStorage) ──
+var _favorites = (function() {
+  try { return JSON.parse(localStorage.getItem('mal_favorites_v1') || '{}'); } catch(e) { return {}; }
+})();
+function saveFavorites() {
+  try { localStorage.setItem('mal_favorites_v1', JSON.stringify(_favorites)); } catch(e) {}
+}
+function isFavorite(id) { return !!_favorites[id]; }
+function toggleFavorite(id, title) {
+  if (_favorites[id]) {
+    delete _favorites[id];
+    showSnackbar('お気に入りから削除しました', null);
+  } else {
+    _favorites[id] = { title: title, savedAt: Date.now() };
+    showSnackbar('お気に入りに追加しました ❤️', null);
+  }
+  saveFavorites();
+  // ボタン更新
+  document.querySelectorAll('[data-fav-id="' + id + '"]').forEach(function(btn) {
+    btn.classList.toggle('active', !!_favorites[id]);
+    btn.title = _favorites[id] ? 'お気に入り解除' : 'お気に入り追加';
+  });
+}
+
+// ── Price History Mini Chart ──
+function buildPriceHistoryChart(history) {
+  if (!history || history.length < 2) return '';
+  var prices = history.map(function(h) { return h.price; });
+  var min = Math.min.apply(null, prices);
+  var max = Math.max.apply(null, prices);
+  var range = max - min || 1;
+  var bars = prices.map(function(p, i) {
+    var pct = Math.round(((p - min) / range) * 80) + 20; // 20〜100%
+    var date = history[i].date ? history[i].date.slice(0, 7) : '';
+    var priceStr = p.toLocaleString() + '万円';
+    return '<div class="price-bar" style="height:' + pct + '%">'
+      + '<div class="price-bar-tip">' + escHtml(date) + '<br>' + escHtml(priceStr) + '</div>'
+      + '</div>';
+  }).join('');
+  var oldPrice = prices[0];
+  var newPrice = prices[prices.length - 1];
+  var diff = newPrice - oldPrice;
+  var diffStr = diff > 0 ? '+' + diff.toLocaleString() + '万円↑' : diff < 0 ? diff.toLocaleString() + '万円↓' : '変動なし';
+  var diffColor = diff > 0 ? 'var(--c-danger)' : diff < 0 ? 'var(--c-success)' : 'var(--c-text3)';
+  return '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:700;color:var(--c-text3);margin-bottom:4px">価格履歴 <span style="color:' + diffColor + ';font-size:12px">' + escHtml(diffStr) + '</span></div>'
+    + '<div class="price-history-chart">' + bars + '</div>'
+    + '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--c-text4)">'
+    + '<span>' + escHtml(history[0].date ? history[0].date.slice(0,7) : '') + '</span>'
+    + '<span>' + escHtml(history[history.length-1].date ? history[history.length-1].date.slice(0,7) : '') + '</span>'
+    + '</div></div>';
+}
+
+// ── Scroll To Top ──
+(function() {
+  var btn = document.getElementById('scrollTopBtn');
+  if (!btn) return;
+  window.addEventListener('scroll', function() {
+    btn.classList.toggle('visible', window.scrollY > 400);
+  }, { passive: true });
+})();
 
 async function loadTransactions(prefecture) {
   var content = document.getElementById('transactionsContent');

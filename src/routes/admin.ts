@@ -500,6 +500,102 @@ admin.post('/import/session/complete', async (c) => {
   });
 });
 
+// ─── POST /api/admin/mark-delisted ───────────────────────────────────────────
+// 最終確認日時が古い物件を delisted に一括変更 (掲載落ち自動検知)
+// Body: { days?: number } — デフォルト 30日
+admin.post('/mark-delisted', async (c) => {
+  const db = c.env.MAL_DB;
+  const body = await c.req.json<{ days?: number }>().catch(() => ({ days: 30 })) as { days?: number };
+  const days = Math.max(1, Math.min(Number(body?.days ?? 30), 365));
+
+  const result = await db.prepare(`
+    UPDATE properties
+    SET status = 'delisted', updated_at = datetime('now')
+    WHERE status = 'active'
+      AND last_seen_at IS NOT NULL
+      AND last_seen_at < datetime('now', '-' || ? || ' days')
+  `).bind(days).run();
+
+  const changes = (result.meta?.changes as number | undefined) ?? 0;
+  return c.json({ delisted: changes, days, message: `${changes}件を掲載落ちとしてマークしました` });
+});
+
+// ─── POST /api/admin/rebuild-fts ─────────────────────────────────────────────
+// FTS5仮想テーブルを既存 properties から再構築 (migration 0008 適用後に1回実行)
+// 大量データは batchSize 単位で分割処理 (30s CPU制限対策)
+admin.post('/rebuild-fts', async (c) => {
+  const db = c.env.MAL_DB;
+  const body = await c.req.json<{ batchSize?: number; offset?: number }>().catch(() => ({ batchSize: 5000, offset: 0 })) as { batchSize?: number; offset?: number };
+  const batchSize = Math.min(Number(body?.batchSize ?? 5000), 10000);
+  const startOffset = Math.max(0, Number(body?.offset ?? 0));
+
+  // 既存FTSインデックスを削除してから再挿入 (offset=0のときのみ)
+  if (startOffset === 0) {
+    try {
+      await db.prepare(`DELETE FROM properties_fts`).run();
+    } catch { /* table may not exist yet */ }
+  }
+
+  const rows = await db.prepare(`
+    SELECT rowid, title, address, city, station, description
+    FROM properties
+    ORDER BY rowid
+    LIMIT ? OFFSET ?
+  `).bind(batchSize, startOffset).all<{
+    rowid: number; title: string; address: string | null;
+    city: string | null; station: string | null; description: string | null;
+  }>();
+
+  const items = rows.results ?? [];
+  let inserted = 0;
+  for (const row of items) {
+    try {
+      await db.prepare(`
+        INSERT INTO properties_fts(rowid, title, address, city, station, description)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(
+        row.rowid,
+        row.title ?? '',
+        row.address ?? '',
+        row.city ?? '',
+        row.station ?? '',
+        row.description ?? ''
+      ).run();
+      inserted++;
+    } catch { /* skip duplicate rowid */ }
+  }
+
+  const nextOffset = startOffset + items.length;
+  const hasMore = items.length === batchSize;
+
+  return c.json({
+    inserted, batchSize, offset: startOffset, nextOffset,
+    hasMore,
+    message: hasMore
+      ? `${inserted}件挿入。次のバッチ: POST /api/admin/rebuild-fts { "offset": ${nextOffset} }`
+      : `FTS5再構築完了 (total offset: ${nextOffset})`,
+  });
+});
+
+// ─── GET /api/admin/suggest-extended ─────────────────────────────────────────
+// city + station 両方を対象としたサジェスト (公開/api/suggest の拡張版)
+admin.get('/suggest-extended', async (c) => {
+  const q = c.req.query('q') ?? '';
+  if (!q || q.length < 2) return c.json({ suggestions: [] });
+  const db = c.env.MAL_DB;
+  const [cities, stations] = await Promise.all([
+    db.prepare(`SELECT DISTINCT city as val FROM properties WHERE city LIKE ? AND status='active' LIMIT 8`)
+      .bind(`%${q}%`).all<{ val: string }>(),
+    db.prepare(`SELECT DISTINCT station as val FROM properties WHERE station LIKE ? AND status='active' AND station IS NOT NULL LIMIT 6`)
+      .bind(`%${q}%`).all<{ val: string }>(),
+  ]);
+  const suggestions = [
+    ...(cities.results ?? []).map(r => r.val),
+    ...(stations.results ?? []).map(r => r.val),
+  ].filter(Boolean);
+  return c.json({ suggestions });
+});
+
 // ─── POST /api/admin/import ───────────────────────────────────────────────────
 admin.post('/import', async (c) => {
   const env = c.env;

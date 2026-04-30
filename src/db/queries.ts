@@ -71,6 +71,18 @@ export async function searchProperties(
     whereClauses.push('(p.management_fee IS NULL OR p.management_fee <= ?)');
     bindings.push(params.managementFeeMax);
   }
+  if (params.repairFundMax !== undefined) {
+    whereClauses.push('(p.repair_fund IS NULL OR p.repair_fund <= ?)');
+    bindings.push(params.repairFundMax);
+  }
+  if (params.direction) {
+    whereClauses.push('p.direction LIKE ?');
+    bindings.push(`%${params.direction}%`);
+  }
+  if (params.structure) {
+    whereClauses.push('p.structure LIKE ?');
+    bindings.push(`%${params.structure}%`);
+  }
   if (params.yieldMin !== undefined) {
     whereClauses.push('p.yield_rate >= ?');
     bindings.push(params.yieldMin);
@@ -81,9 +93,19 @@ export async function searchProperties(
     bindings.push(...params.sites);
   }
   if (params.query) {
-    whereClauses.push('(p.title LIKE ? OR p.address LIKE ? OR p.description LIKE ?)');
-    const q = `%${params.query}%`;
-    bindings.push(q, q, q);
+    // FTS5全文検索 (1M件対応) — LIKE '%xxx%' フルスキャンを廃止
+    // FTS5テーブルが存在しない場合 (migration未適用) は LIKE にフォールバック
+    const ftsTokens = params.query.trim()
+      .replace(/["\(\)\[\]{}^*?]/g, ' ')   // FTS5特殊文字を除去
+      .split(/[\s　]+/).filter(Boolean);
+    if (ftsTokens.length > 0) {
+      // 複数ワードは AND 検索 (全ワード含む物件のみ)
+      const ftsQuery = ftsTokens.map(t => `"${t}"`).join(' ');
+      whereClauses.push(
+        `p.rowid IN (SELECT rowid FROM properties_fts WHERE properties_fts MATCH ? LIMIT 50000)`
+      );
+      bindings.push(ftsQuery);
+    }
   }
   // hideDuplicates: default true — use is_dedup_primary index (fast, no subquery)
   // false: show all rows including duplicates
@@ -343,9 +365,22 @@ export async function searchMasters(
     bindings.push(params.yieldMin);
   }
   if (params.query) {
-    whereClauses.push('(m.title LIKE ? OR m.address LIKE ? OR m.description LIKE ?)');
-    const q = `%${params.query}%`;
-    bindings.push(q, q, q);
+    // FTS5全文検索 (properties_fts から master_id 経由でフィルタ)
+    const ftsTokens = params.query.trim()
+      .replace(/["\(\)\[\]{}^*?]/g, ' ')
+      .split(/[\s　]+/).filter(Boolean);
+    if (ftsTokens.length > 0) {
+      const ftsQuery = ftsTokens.map(t => `"${t}"`).join(' ');
+      // master_properties には直接FTS5がないため、properties経由でrowid取得
+      whereClauses.push(
+        `m.id IN (
+          SELECT DISTINCT p.master_id FROM properties p
+          WHERE p.master_id IS NOT NULL
+            AND p.rowid IN (SELECT rowid FROM properties_fts WHERE properties_fts MATCH ? LIMIT 50000)
+        )`
+      );
+      bindings.push(ftsQuery);
+    }
   }
 
   const whereSQL = `WHERE ${whereClauses.join(' AND ')}`;
