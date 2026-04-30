@@ -128,22 +128,50 @@ export async function searchProperties(
   const orderSQL = sortMap[params.sortBy ?? 'newest'] ?? 'p.scraped_at DESC';
 
   // 1クエリで物件リストとサイト別件数を並列取得 (COUNT(*)クエリを排除)
-  const [rows, siteCountRows] = await Promise.all([
-    db
-      .prepare(`
-        SELECT p.*
-        FROM properties p
-        ${whereSQL}
-        ORDER BY ${orderSQL}
-        LIMIT ? OFFSET ?
-      `)
-      .bind(...bindings, limit, offset)
-      .all<Record<string, unknown>>(),
-    db
-      .prepare(`SELECT site_id, COUNT(*) as cnt FROM properties p ${whereSQL} GROUP BY site_id`)
-      .bind(...bindings)
-      .all<{ site_id: SiteId; cnt: number }>(),
-  ]);
+  // FTS5テーブルが存在しない場合は LIKE にフォールバック
+  async function runSearchQueries(wSQL: string, binds: (string | number)[]) {
+    return Promise.all([
+      db
+        .prepare(`SELECT p.* FROM properties p ${wSQL} ORDER BY ${orderSQL} LIMIT ? OFFSET ?`)
+        .bind(...binds, limit, offset)
+        .all<Record<string, unknown>>(),
+      db
+        .prepare(`SELECT site_id, COUNT(*) as cnt FROM properties p ${wSQL} GROUP BY site_id`)
+        .bind(...binds)
+        .all<{ site_id: SiteId; cnt: number }>(),
+    ]);
+  }
+
+  type _RunResult = Awaited<ReturnType<typeof runSearchQueries>>;
+  let rows: _RunResult[0];
+  let siteCountRows: _RunResult[1];
+  try {
+    [rows, siteCountRows] = await runSearchQueries(whereSQL, bindings);
+  } catch (err: unknown) {
+    const msg = String((err as Error)?.message ?? err);
+    // FTS5テーブルが存在しない場合 → LIKE フォールバック
+    if (params.query && (msg.includes('no such table') || msg.includes('properties_fts'))) {
+      console.warn('[searchProperties] FTS5 not available, falling back to LIKE search');
+      // FTS5 条件を除いた WHERE を再構築
+      const fallbackClauses = whereClauses.filter(c => !c.includes('properties_fts'));
+      const fallbackBindings = bindings.filter((_, i) => {
+        // FTS5クエリのbinding (最後にpushされた ftsQuery) を除外するため、インデックスで判定
+        const ftsIdx = whereClauses.findIndex(c => c.includes('properties_fts'));
+        return ftsIdx < 0 || i !== ftsIdx;
+      });
+      // LIKE フォールバック条件を追加
+      const likeTokens = params.query.trim().split(/[\s　]+/).filter(Boolean);
+      const likeConditions = likeTokens.map(() => '(p.title LIKE ? OR p.address LIKE ? OR p.description LIKE ?)').join(' AND ');
+      if (likeConditions) {
+        fallbackClauses.push(`(${likeConditions})`);
+        for (const t of likeTokens) { fallbackBindings.push(`%${t}%`, `%${t}%`, `%${t}%`); }
+      }
+      const fallbackWhereSQL = fallbackClauses.length > 0 ? `WHERE ${fallbackClauses.join(' AND ')}` : '';
+      [rows, siteCountRows] = await runSearchQueries(fallbackWhereSQL, fallbackBindings);
+    } else {
+      throw err;
+    }
+  }
 
   const properties: Property[] = (rows.results ?? []).map(rowToProperty);
 
