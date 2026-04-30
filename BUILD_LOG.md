@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-04-30 (Desktop) セッション6 — auto-archive閾値修正・GoogleDrive 3TB連携確認
+
+- **環境**: Desktop
+- **ブランチ**: master
+- **変更内容**:
+  1. **`src/index.tsx` auto-archive閾値バグ修正**:
+     - `4096MB` (有料プラン想定) → `400MB` (無料tier 500MB の80%) に修正
+     - 無料tierでauto-archiveが一度も発動していなかった根本原因を解決
+  2. **archive-cold 手動実行**: 960件をD1→R2に移動 (即時スペース確保)
+  3. **アーキテクチャ確認**: D1(hot) → R2(archive JSONL) → GoogleDrive 3TB(rclone sync) 実装済み確認
+     - `scripts/sync-r2-to-drive.sh` でR2→GDrive (folderID: 1o7duhNw1ngzT_EynWdX53cqzP-I_JHOB)
+     - `POST /api/admin/archive-cold` で手動アーカイブ可能
+- **DB状況** (本セッション終了時):
+  - 総件数: 476,379件 (前セッション比 +2,502件、suumo_baibai進行中)
+  - D1推定: 288MB / 500MB ✅ (余裕あり)
+  - R2: 290MB (archive objects 149個)
+  - suumo_baibai: 3,462件
+- **デプロイ**: ⏳ 未 — index.tsx変更を本番反映するために必要
+  - **要手動実行**: `cd C:\Users\reale\Downloads\mal-worker && npx wrangler deploy`
+- **次のタスク**:
+  1. `npx wrangler deploy` で auto-archive 400MB閾値を本番反映
+  2. 漏れ都道府県の再スクレイプ: `--pref=hokkaido_`, `--pref=aomori`, `--pref=iwate`, `--pref=miyagi`, `--pref=gumma`
+  3. D1が380MB超えたら手動 `POST /api/admin/archive-cold` を実行 (デプロイ前の応急措置)
+  4. R2→GoogleDrive同期: `bash scripts/sync-r2-to-drive.sh`
+
+---
+
 ## 2026-04-30 15:00 (Desktop) セッション5 — SUUMO売買スクレイパー完全刷新・DB 500MB上限対応
 
 - **環境**: Desktop
