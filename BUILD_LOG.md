@@ -5,6 +5,40 @@
 
 ---
 
+## 2026-04-30 15:00 (Desktop) セッション5 — SUUMO売買スクレイパー完全刷新・DB 500MB上限対応
+
+- **環境**: Desktop
+- **ブランチ**: master (commit 1fff9da)
+- **変更内容**:
+  1. **SUUMO売買スクレイパー完全刷新** (`scrape-suumo-baibai-local.mjs`):
+     - initMap POST方式 (27件/都道府県) → `/ms/chuko/{pref}/{city}/` 都市別リスト方式に変更
+     - nc_XXXXXXXX 形式の実物件IDで重複排除 (detailURL付き)
+     - 全47都道府県スラグ定義 (hokkaido_/gumma等の例外対応)
+     - 物件名・販売価格・住所・駅情報・専有面積・間取り・築年月取得
+     - dry-run 東京: 1,393件/3ページ → フル実行時は数万件見込み
+  2. **src/db/queries.ts**: allSites に suumo_baibai/suumo_chintai 追加 (ダッシュボード表示対応)
+  3. **D1 空き容量確保**:
+     - 不要インデックス5個削除 (import_session/master関連)
+     - 操作ログテーブルクリア (download_queue/scrape_jobs/csv_imports)
+     - 500MB → 447MB に削減 (約30MB確保)
+- **デプロイ**: ⏳ 未 (セッションの sandbox 制限でブロック)
+  - **要手動実行**: `cd C:\Users\reale\Downloads\mal-worker && npx wrangler deploy`
+- **現在のDB状況** (15:00時点):
+  - 総件数: 473,877件 (内訳: terass_suumo 151K + terass_reins 150K + terass_athome 149K + kenbiya 11.8K + suumo_chintai 6.6K + rakumachi 2.8K + chintai 1.5K + others)
+  - DB容量: ~447MB / 500MB (D1 free tier上限)
+- **実行中** (15:00): SUUMO売買スクレイパー 47都道府県フルラン (bmfuk5yvv)
+  - 予定: 東京~49市区×最大200ページ = 数万件見込み
+  - 注意: D1が500MB制限のため Cloudflare Workers 有料プランへのアップグレード推奨
+- **次回再実行が必要な都道府県** (slug修正/import失敗のため):
+  - 北海道 (slug: hokkaido_ 対応済み → 次回: `--pref=hokkaido_`)
+  - 群馬 (slug: gumma 対応済み → 次回: `--pref=gumma`)
+  - 宮城 (DB満杯でimport失敗 1,330件ロスト → 次回: `--pref=miyagi`)
+- **次のタスク**:
+  1. Workers有料プラン ($5/月) へのアップグレード → DB容量10GB確保
+  2. 上記3都道府県の再実行
+  3. wrangler deploy (手動)
+  4. 1,000,000件達成は有料プラン移行後に継続
+
 ## 2026-04-30 13:00 (Desktop) セッション4 — 100万件DB構築 全5スクレイパー並列インポート開始
 
 - **環境**: Desktop
