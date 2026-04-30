@@ -5,6 +5,35 @@
 
 ---
 
+## 2026-04-30 (Desktop) — パフォーマンス最適化 + 実データ収集完了
+
+- **環境**: Desktop
+- **ブランチ**: master (commits 71a215e, 852d1fe)
+- **変更内容**:
+  1. **スクレイパー CSV バグ修正 + バッチ分割** (commit 71a215e):
+     - Worker CSV parser regex バグ (`[^,]*` → `[^,]+`) を特定し、doubled-header ワークアラウンドを実装
+     - `importToWorker`/`importBatch` を 100件/バッチ分割送信に変更 (60秒タイムアウト対策)
+     - 楽待スクレイパー: 982件インポート完了 (10都道府県 × 2ページ)
+  2. **パフォーマンス大幅最適化** (commit 852d1fe):
+     - **CSV regex 根本修正**: `admin.ts` の `parseRow` regex を `[^,]+` に修正 (空文字ゴースト排除)
+     - doubled-header ワークアラウンドをスクレイパーから削除
+     - **検索クエリ最適化**: 3 sequential D1 queries → 2 parallel (COUNT(*)を廃止、site-count SUM で代替)
+     - **JOINs 除去**: searchProperties の LEFT JOIN property_images/features 削除 (GROUP BY 619K行 排除)
+     - **D1 自動アーカイブ閾値修正**: 400MB → 4096MB (正しい 5GB free tier)
+     - **LIKE→IN 変換**: `site_id LIKE 'terass_%'` を `IN('terass_reins','terass_suumo','terass_athome')` に
+     - **キャッシュキー正規化**: URLSearchParams をソートしてキャッシュヒット率向上
+  3. **実データ収集完了**:
+     - 楽待: 982件
+     - 健美家 + 不動産ジャパン: 3,955件 (計 4,937件 新規インポート)
+- **デプロイ**: ⏳ `_deploy.bat` ダブルクリック実行中 (commit 852d1fe)
+- **git**: push 済み (852d1fe → master)
+- **次のタスク**:
+  1. ✅ 楽待・健美家・不動産Japan 実データ収集完了
+  2. ⚠️ デプロイ確認 (`_deploy.bat` 実行中 → wrangler deploy 完了確認)
+  3. 検索UIの動作確認 (3モード切替・実データ表示)
+
+---
+
 ## 2026-04-27 (Desktop) — 3モード検索UI全面再構築 + 不動産ポータルUXリサーチ反映
 
 - **環境**: Desktop
