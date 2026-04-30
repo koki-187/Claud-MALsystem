@@ -63,8 +63,13 @@ export async function searchProperties(
     bindings.push(params.ageMax);
   }
   if (params.stationMinutes !== undefined) {
-    whereClauses.push('p.station_minutes IS NOT NULL AND p.station_minutes <= ?');
+    // Include properties where station_minutes is unknown (NULL) — same behaviour as searchMasters
+    whereClauses.push('(p.station_minutes IS NULL OR p.station_minutes <= ?)');
     bindings.push(params.stationMinutes);
+  }
+  if (params.managementFeeMax !== undefined) {
+    whereClauses.push('(p.management_fee IS NULL OR p.management_fee <= ?)');
+    bindings.push(params.managementFeeMax);
   }
   if (params.yieldMin !== undefined) {
     whereClauses.push('p.yield_rate >= ?');
@@ -324,6 +329,10 @@ export async function searchMasters(
     whereClauses.push('(m.station_minutes IS NULL OR m.station_minutes <= ?)');
     bindings.push(params.stationMinutes);
   }
+  if (params.managementFeeMax !== undefined) {
+    whereClauses.push('(m.management_fee IS NULL OR m.management_fee <= ?)');
+    bindings.push(params.managementFeeMax);
+  }
   if (params.yieldMin !== undefined) {
     whereClauses.push('m.yield_rate >= ?');
     bindings.push(params.yieldMin);
@@ -347,23 +356,25 @@ export async function searchMasters(
   };
   const orderSQL = sortMap[params.sortBy ?? 'newest'] ?? 'm.last_seen_at DESC';
 
-  const countResult = await db
-    .prepare(`SELECT COUNT(*) as total FROM master_properties m ${whereSQL}`)
-    .bind(...bindings)
-    .first<{ total: number }>();
+  // Run COUNT and data query in parallel (same optimisation as searchProperties)
+  const [countResult, masterRows] = await Promise.all([
+    db
+      .prepare(`SELECT COUNT(*) as total FROM master_properties m ${whereSQL}`)
+      .bind(...bindings)
+      .first<{ total: number }>(),
+    db
+      .prepare(`
+        SELECT m.*
+        FROM master_properties m
+        ${whereSQL}
+        ORDER BY ${orderSQL}
+        LIMIT ? OFFSET ?
+      `)
+      .bind(...bindings, limit, offset)
+      .all<Record<string, unknown>>(),
+  ]);
 
   const total = countResult?.total ?? 0;
-
-  const masterRows = await db
-    .prepare(`
-      SELECT m.*
-      FROM master_properties m
-      ${whereSQL}
-      ORDER BY ${orderSQL}
-      LIMIT ? OFFSET ?
-    `)
-    .bind(...bindings, limit, offset)
-    .all<Record<string, unknown>>();
 
   const masterList = masterRows.results ?? [];
   const masterIds = masterList.map(r => r.id as string);

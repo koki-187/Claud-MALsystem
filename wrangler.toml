@@ -22,7 +22,7 @@ binding = "MAL_STORAGE"
 bucket_name = "real-estate-files"
 
 [vars]
-ENVIRONMENT = "development"
+ENVIRONMENT = "production"
 APP_VERSION = "6.2.0"
 MAX_RESULTS_PER_SITE = "15"
 CACHE_TTL_SECONDS = "3600"
