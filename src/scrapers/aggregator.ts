@@ -42,6 +42,8 @@ function createScrapers(): Partial<Record<SiteId, BaseScraper>> {
     rakumachi: new RakumachiScraper(),
     // terass_* are DB-only (imported via CSV); no live scraper
     // suumo / athome / reins removed: covered by terass_suumo / terass_athome / terass_reins
+    // suumo_chintai / suumo_baibai: ローカルスクレイパー推奨 (現在 Worker 側 max 3ページ制限)。
+    //   Worker cron では scrape しない — ローカルから D1 に直接 upsert される。
   };
 }
 

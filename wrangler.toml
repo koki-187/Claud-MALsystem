@@ -24,7 +24,7 @@ bucket_name = "real-estate-files"
 [vars]
 ENVIRONMENT = "production"
 APP_VERSION = "6.2.0"
-MAX_RESULTS_PER_SITE = "15"
+MAX_RESULTS_PER_SITE = "50"
 CACHE_TTL_SECONDS = "3600"
 RATE_LIMIT_PER_MINUTE = "60"
 # scheduled handler の self-call 用 (download-queue/process)。secret として ADMIN_SECRET を別途 wrangler secret put で設定する。

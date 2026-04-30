@@ -159,7 +159,7 @@ function propertiesToCsv(properties) {
     'latitude','longitude','listed_at','sold_at'];
   const esc = v => {
     if (v === null || v === undefined || v === '') return '';
-    const s = String(v);
+    const s = String(v).replace(/\r/g, '');  // strip CR to prevent column misalignment
     return (s.includes(',') || s.includes('"') || s.includes('\n'))
       ? '"' + s.replace(/"/g, '""') + '"' : s;
   };

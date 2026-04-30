@@ -25,7 +25,8 @@ type _DeprecatedSiteId = 'suumo' | 'athome' | 'reins';
 
 /** アクティブなサイト ID。新規スクレイプ・ UI 表示はこの型を使用する。 */
 export type ActiveSiteId = 'homes' | 'fudosan' | 'chintai' | 'smaity' | 'kenbiya' | 'rakumachi'
-  | 'terass_reins' | 'terass_suumo' | 'terass_athome';
+  | 'terass_reins' | 'terass_suumo' | 'terass_athome'
+  | 'suumo_chintai' | 'suumo_baibai';  // ローカルスクレイパー収集分 (Worker側ではスクレイプしない)
 
 /** 全サイト ID (DB の既存行を含む)。型チェック緩和が必要な場合のみ使用。 */
 export type SiteId = ActiveSiteId | _DeprecatedSiteId;
@@ -52,6 +53,9 @@ export const SITES: Partial<Record<SiteId, SiteConfig>> = {
   terass_reins: { id: 'terass_reins', name: 'TERASS-REINS',  url: 'https://picks-agent.terass.com',       logo: '📋', color: '#10B981', rateLimit: 0  },
   terass_suumo: { id: 'terass_suumo', name: 'TERASS-SUUMO',  url: 'https://picks-agent.terass.com',       logo: '🏠', color: '#059669', rateLimit: 0  },
   terass_athome:{ id: 'terass_athome',name: 'TERASS-AtHome', url: 'https://picks-agent.terass.com',       logo: '🏘', color: '#0891B2', rateLimit: 0  },
+  // ローカルスクレイパーが収集する SUUMO データ (Worker 側ではスクレイプしない)
+  suumo_chintai:{ id: 'suumo_chintai', name: 'SUUMO賃貸',   url: 'https://suumo.jp',                     logo: '🏠', color: '#007B43', rateLimit: 0  },
+  suumo_baibai: { id: 'suumo_baibai',  name: 'SUUMO売買',   url: 'https://suumo.jp',                     logo: '🏡', color: '#005E33', rateLimit: 0  },
 };
 
 export type PropertyType =
