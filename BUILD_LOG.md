@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-04-30 (Desktop) セッション3 — 5バグ修正デプロイ + HOME'S スクレイピング完了
+
+- **環境**: Desktop
+- **ブランチ**: master (commits 051cd64, aaaccbf)
+- **変更内容**:
+  1. **5つのコード品質バグ修正** (commit 051cd64):
+     - `admin.ts`: CSV regex (`[^,]+`) → 正規 char-by-char パーサー `splitCsvFields()` に置換 (空フィールド欠落バグ根本修正)
+     - `db/queries.ts`: `stationMinutes` WHERE句を `searchProperties` と `searchMasters` で統一 (`IS NULL OR <=`)
+     - `db/queries.ts`: `managementFeeMax` フィルター両関数に実装 (型定義済みだが未適用だった)
+     - `db/queries.ts`: `searchMasters` を sequential queries → `Promise.all` 並列化
+     - `index.tsx`: master 検索キャッシュキーをソートして正規化 (同一条件でキャッシュヒット保証)
+     - `wrangler.toml`: `ENVIRONMENT = "development"` → `"production"` 修正
+  2. **HOME'S Playwright スクレイピング追加実行**:
+     - 東京(192件)・神奈川(192件)・広島(192件)・宮城(193件) 追加取得
+     - 大阪: WAF blocked (未取得、低優先)
+- **デプロイ**: ✅ 済 — Version ID: bd397f3e-86aa-4faf-9170-5cc17db14621
+  - Exit Code: 0
+  - ENVIRONMENT: "production" 確認済み
+- **git**: push 済み (aaaccbf → master)
+- **DB現状**: ~362,000+ 件
+  - homes: 約1,000件 (12都道府県分)
+  - terass (reins+suumo+athome): 356,036件
+  - kenbiya: 3,522件 / rakumachi: ~1,516件
+  - chintai: 574件 / fudosan: 451件 / smaity: 0件
+
+---
+
 ## 2026-04-30 (Desktop) セッション2 — HOME'S Playwright スクレイパー完成
 
 - **環境**: Desktop
