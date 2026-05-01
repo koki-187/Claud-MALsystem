@@ -84,6 +84,54 @@
 
 ---
 
+## 2026-05-01 (Desktop) — Federation Stats + スクレイパー DB2 起動
+
+- **環境**: Desktop
+- **ブランチ**: master (commit 44ba20f)
+- **デプロイ**: 済 — Version `539df7e1`
+
+### 実装内容
+
+#### 1. migration 0008 を DB2 に適用
+```bash
+wrangler d1 execute mal-search-db-2 --remote --file=migrations/0008_perf_fts5.sql
+```
+- FTS5 仮想テーブル + 3同期トリガー + 7複合インデックスが DB2 に適用済み
+- DB2 は空DB から始まるため FTS5 はトリガーで逐次更新（DB1 のクライシスを回避）
+
+#### 2. Stats エンドポイント全面フェデレーション対応
+
+| エンドポイント | 変更前 | 変更後 |
+|--------------|-------|-------|
+| `/api/stats` | DB1 のみ | `getStatsFederated` — DB1+DB2 並列→合算 |
+| `/api/admin/stats` | DB1 のみ | DB1+DB2 `getPropCounts()` 並列 + 管理テーブルは DB1 |
+| `/api/admin/d1-capacity` | DB1 のみ | `shards[]` 構造 — DB毎の使用率・ステータス表示 |
+
+#### 3. スクレイパー DB2 書き込み確認
+- **suumo_baibai** (PID 37940): 全47都道府県フルラン起動中 (max-pages=200)
+- **suumo_chintai** (PID 49760): 全47都道府県フルラン起動中 (max-pages=100)
+- **kenbiya/homes/rakumachi**: Worker cron が次回の30分刻みで DB2 へ自動書き込み
+- **DB2 確認**: 223件 / 0MB (書き込み開始確認 ✅)
+
+### 現在の集計
+| DB | 件数 | 状態 |
+|----|-----|------|
+| DB1 (frozen) | 529,457件 | 100%満杯 / read-only |
+| DB2 (active) | 223件→ | 書き込み中 |
+| **合計** | **529,680件** | フェデレーション検索対応 |
+
+### 永続設計原則（変更禁止）
+- D1 Multi-DB Federation = 完全無料 1M+件の唯一の実装方式
+- 有料プランへの移行・議論は一切不要
+- DB追加は `getReadDBs` / `getWriteDB` を拡張するだけ
+
+### 次のタスク
+- suumo_baibai/chintai フルラン完了後に DB2 件数確認 (目標: +50K件)
+- DB2 が 500MB 近づいたら DB3 (mal-search-db-3) を追加 (同パターン)
+- TERASS PICKS 次回インポート → DB2 へ自動ルーティング
+
+---
+
 ## 2026-05-01 (Desktop) — D1 Multi-DB Federation 完全実装・デプロイ完了
 
 - **環境**: Desktop
