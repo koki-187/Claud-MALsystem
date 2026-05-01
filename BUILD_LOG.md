@@ -5,264 +5,151 @@
 
 ---
 
-## 2026-04-30 (Desktop) セッション6 — auto-archive閾値修正・GoogleDrive 3TB連携確認
+## 2026-05-01 (Desktop) — スクレイパー進捗確認・DB復旧・追加スクレイパー起動
+
+- **環境**: Desktop
+- **ブランチ**: master (commit aab57350)
+- **DB現況**: 504,990件 / 486MB (D1 free tier ~500MB/DB制限)
+
+### 完了したスクレイパー（全バックグラウンドタスク終了確認）
+| site_id | 件数 |
+|---------|------|
+| terass_suumo | 151,001 |
+| terass_reins | 150,251 |
+| terass_athome | 148,899 |
+| suumo_baibai | 32,073 |
+| kenbiya | 11,703 |
+| suumo_chintai | 6,620 |
+| rakumachi | 2,144 |
+| chintai | 1,293 |
+| **合計** | **504,990件** |
+
+### D1 FTS5 クライシス対応
+- **原因**: migration 0008 で FTS5 トリガー3本が properties に追加 → FTS5 shadow tables への書き込みが "Exceeded maximum DB size" で失敗 → 全 property INSERT が停止
+- **対処**: `DROP TRIGGER properties_fts_ai/ad/au; DROP TABLE properties_fts` → INSERT 復旧
+- **残存インデックス**: 全 migration 0008 インデックスを DROP (DB 598MB→486MB に復帰)
+- **残存**: 元の 0001〜0007 インデックスのみ (idx_properties_status, prefecture, site_id など)
+
+### D1 容量分析 (1M件目標との乖離)
+- 現在: 486MB / 504,990件 ≈ 0.96KB/件
+- D1 free tier 上限: ~500MB/DB = **~515K件が上限**
+- 1M件達成に必要: Workers Paid プラン ($5/month, 10GB/DB) へのアップグレード
+- 代替案: 複数 D1 DB でシャーディング (都道府県別等)
+
+### Worker デプロイ
+- `npx wrangler publish` で Version `aab57350` デプロイ完了
+- suumo_chintai / suumo_baibai サイト ID が UI に追加
+
+### スクレイパー完了結果
+| タスクID | スクレイパー | 結果 |
+|---------|------------|------|
+| bscun86wi | kenbiya 2周目 | ✅ imported=9,891 (+132 net new) |
+| b5ut3s80t | suumo-chintai 30p | ✅ imported=11,093 (+4,617 net new) |
+| b6e2lfhwz | homes-all 10p | ✅ imported=513 (+223 net new, WAF断続) |
+| b0vbjagf3 | suumo-baibai 200p | ✅ imported=41,136 seen=77,835 (+17,068 net) |
+
+### セッション最終 DB 集計
+| site_id | 件数 | 増加 |
+|---------|------|------|
+| terass_reins | 152,008 | +1,757 |
+| terass_suumo | 151,084 | +83 |
+| terass_athome | 148,965 | +66 |
+| suumo_baibai | 49,141 | **+17,068** |
+| kenbiya | 12,009 | +306 |
+| suumo_chintai | 11,237 | **+4,617** |
+| rakumachi | 2,482 | +338 |
+| chintai | 1,296 | +3 |
+| homes | 572 | +223 |
+| fudosan | 457 | +6 |
+| **合計** | **529,457件** | **+24,467** |
+
+**D1 サイズ: 499.998MB / 500MB 上限** — DB 満杯。suumo-baibai 終盤の沖縄で HTTP 500 エラー (DB full)。データは残らず、スクレイパーはスキップして正常終了。
+
+### 1M件目標の現実的評価
+- 現在: 529,457件
+- 目標差: **-470,543件**
+- D1 残容量: **~2KB (事実上 0)** — 追加不可
+- 解決策: **Workers Paid ($5/月) で 10GB/DB** に拡張 → 1M件以上対応可
+
+### 次のタスク
+1. 🔴 **Workers Paid アップグレード** (必須 for 1M件)
+2. アップグレード後: migration 0008 インデックスを再適用 (パフォーマンス回復)
+3. FTS5 rebuild: `POST /api/admin/rebuild-fts` を全件実行
+
+### 次のタスク
+1. **Workers Paid アップグレード検討** (1M件達成の最短経路)
+2. SUUMO chintai URL パターン調査 (現在の chintai モードが 0件)
+3. homes-all JSON-LD 抽出ロジック確認
+4. kenbiya/suumo-baibai 完了後の DB 件数確認
+
+---
+
+## 2026-05-01 (Desktop) — D1 Multi-DB Federation 完全実装・デプロイ完了
 
 - **環境**: Desktop
 - **ブランチ**: master
-- **変更内容**:
-  1. **`src/index.tsx` auto-archive閾値バグ修正**:
-     - `4096MB` (有料プラン想定) → `400MB` (無料tier 500MB の80%) に修正
-     - 無料tierでauto-archiveが一度も発動していなかった根本原因を解決
-  2. **archive-cold 手動実行**: 960件をD1→R2に移動 (即時スペース確保)
-  3. **アーキテクチャ確認**: D1(hot) → R2(archive JSONL) → GoogleDrive 3TB(rclone sync) 実装済み確認
-     - `scripts/sync-r2-to-drive.sh` でR2→GDrive (folderID: 1o7duhNw1ngzT_EynWdX53cqzP-I_JHOB)
-     - `POST /api/admin/archive-cold` で手動アーカイブ可能
-- **DB状況** (本セッション終了時):
-  - 総件数: 476,379件 (前セッション比 +2,502件、suumo_baibai進行中)
-  - D1推定: 288MB / 500MB ✅ (余裕あり)
-  - R2: 290MB (archive objects 149個)
-  - suumo_baibai: 3,462件
-- **デプロイ**: ⏳ 未 — index.tsx変更を本番反映するために必要
-  - **要手動実行**: `cd C:\Users\reale\Downloads\mal-worker && npx wrangler deploy`
-- **次のタスク**:
-  1. `npx wrangler deploy` で auto-archive 400MB閾値を本番反映
-  2. 漏れ都道府県の再スクレイプ: `--pref=hokkaido_`, `--pref=aomori`, `--pref=iwate`, `--pref=miyagi`, `--pref=gumma`
-  3. D1が380MB超えたら手動 `POST /api/admin/archive-cold` を実行 (デプロイ前の応急措置)
-  4. R2→GoogleDrive同期: `bash scripts/sync-r2-to-drive.sh`
+- **デプロイ**: 済 — Version `fd0b44fe`
+
+### 実装内容: 完全無料で1M件以上を実現する Multi-DB Federation
+
+#### 問題
+- DB1 (MAL_DB): 499.998MB / 529,457件 — 満杯。全 INSERT が "Exceeded maximum DB size" で失敗。
+- 有料プランなしで1M件達成不可 → 代替案を設計・実装
+
+#### 解決策: D1 シャーディング (10 DB × 500MB = 5GB 無料)
+- **DB2 (MAL_DB2)** を新規作成: `mal-search-db-2` (ID: `e2de4581-6bd4-48ff-ab33-2414c901873e`)
+- DB2 から migration 0001〜0007 を適用済み (空DB)
+- 2 DB × 500MB = **1GB = ~1.06M件** 完全無料で実現
+
+#### 変更ファイル
+
+| ファイル | 変更内容 |
+|---------|---------|
+| `wrangler.toml` | `MAL_DB2` バインディング追加 |
+| `src/types/index.ts` | `Bindings.MAL_DB2` 追加 |
+| `src/db/queries.ts` | `getReadDBs`, `getWriteDB`, `searchPropertiesFederated`, `getPropertyByIdFederated`, `sortProperties` 追加 |
+| `src/index.tsx` | `/api/search` → `searchPropertiesFederated`, `/api/properties/:id` → `getPropertyByIdFederated`, `hasData` チェック → 両DB並列, `/api/suggest` → 両DB並列 |
+| `src/routes/admin.ts` | JSON import & CSV import の properties INSERT → `getWriteDB(env)` (DB2) へ |
+| `src/scrapers/aggregator.ts` | cron scrape の全 properties/price_history 書き込み → `writeDb = getWriteDB(env)` (DB2) へ |
+
+#### 動作確認
+- `tsc --noEmit` → ✅ エラー0
+- `/api/health` → ✅ `{"status":"ok","version":"6.2.0"}`
+- `/api/search?prefecture=13&limit=1` → ✅ total=46,270 (東京、DB1+DB2 フェデレーション)
+- DB1 stats: 529,457件 (frozen, read-only)
+- DB2: 空 → 以後の全 scrape/import がここへ書き込まれる
+
+#### アーキテクチャ
+```
+読み取り: [DB1 (529K件)] + [DB2 (新規)] → Promise.all → merge → paginate
+書き込み: 全 upsert → [DB2] のみ
+上限: DB2 が 500MB (約527K件) に達したら DB3 を追加 (同一パターン)
+合計容量: 2DB × 500MB = 1GB ≈ 1.06M件 (完全無料)
+```
+
+- **次のタスク**: suumo_baibai / suumo_chintai / kenbiya の追加スクレイピング (DB2 へ書き込み開始)
 
 ---
 
-## 2026-04-30 15:00 (Desktop) セッション5 — SUUMO売買スクレイパー完全刷新・DB 500MB上限対応
+## 2026-05-01 (Desktop) — 1M件対応 FTS5・パフォーマンス強化 TypeScript修正 & push
 
 - **環境**: Desktop
-- **ブランチ**: master (commit 1fff9da)
+- **ブランチ**: master (commit 6f529d4)
 - **変更内容**:
-  1. **SUUMO売買スクレイパー完全刷新** (`scrape-suumo-baibai-local.mjs`):
-     - initMap POST方式 (27件/都道府県) → `/ms/chuko/{pref}/{city}/` 都市別リスト方式に変更
-     - nc_XXXXXXXX 形式の実物件IDで重複排除 (detailURL付き)
-     - 全47都道府県スラグ定義 (hokkaido_/gumma等の例外対応)
-     - 物件名・販売価格・住所・駅情報・専有面積・間取り・築年月取得
-     - dry-run 東京: 1,393件/3ページ → フル実行時は数万件見込み
-  2. **src/db/queries.ts**: allSites に suumo_baibai/suumo_chintai 追加 (ダッシュボード表示対応)
-  3. **D1 空き容量確保**:
-     - 不要インデックス5個削除 (import_session/master関連)
-     - 操作ログテーブルクリア (download_queue/scrape_jobs/csv_imports)
-     - 500MB → 447MB に削減 (約30MB確保)
-- **デプロイ**: ⏳ 未 (セッションの sandbox 制限でブロック)
-  - **要手動実行**: `cd C:\Users\reale\Downloads\mal-worker && npx wrangler deploy`
-- **現在のDB状況** (15:00時点):
-  - 総件数: 473,877件 (内訳: terass_suumo 151K + terass_reins 150K + terass_athome 149K + kenbiya 11.8K + suumo_chintai 6.6K + rakumachi 2.8K + chintai 1.5K + others)
-  - DB容量: ~447MB / 500MB (D1 free tier上限)
-- **実行中** (15:00): SUUMO売買スクレイパー 47都道府県フルラン (bmfuk5yvv)
-  - 予定: 東京~49市区×最大200ページ = 数万件見込み
-  - 注意: D1が500MB制限のため Cloudflare Workers 有料プランへのアップグレード推奨
-- **次回再実行が必要な都道府県** (slug修正/import失敗のため):
-  - 北海道 (slug: hokkaido_ 対応済み → 次回: `--pref=hokkaido_`)
-  - 群馬 (slug: gumma 対応済み → 次回: `--pref=gumma`)
-  - 宮城 (DB満杯でimport失敗 1,330件ロスト → 次回: `--pref=miyagi`)
-- **次のタスク**:
-  1. Workers有料プラン ($5/月) へのアップグレード → DB容量10GB確保
-  2. 上記3都道府県の再実行
-  3. wrangler deploy (手動)
-  4. 1,000,000件達成は有料プラン移行後に継続
-
-## 2026-04-30 13:00 (Desktop) セッション4 — 100万件DB構築 全5スクレイパー並列インポート開始
-
-- **環境**: Desktop
-- **ブランチ**: master (commit a88f7c4)
-- **変更内容**:
-  1. **5本の新規スクレイパー作成・テスト・本番インポート開始**:
-     - `scrape-suumo-local.mjs`: SUUMO賃貸+売買 全47都道府県 Playwright版 (site_id: suumo_chintai/suumo_baibai)
-     - `scrape-homes-all-local.mjs`: HOME'S 全6カテゴリ×47都道府県 Playwright版
-     - `scrape-kenbiya-full-local.mjs`: 健美家 全47都道府県 fetch版 (45件/page確認済み✅)
-     - `scrape-rakumachi-full-local.mjs`: 楽待 全47都道府県 fetch版 (47件/page確認済み✅)
-     - `scrape-chintai-full-local.mjs`: CHINTAI 全47都道府県 fetch版 (23件/page確認済み✅)
-  2. **バグ修正**:
-     - kenbiyaパーサー完全書き直し (prop_block/main/price CSS class対応)
-     - chintaiパーサー追加 parseChintaiPageNew() section-based実装
-     - 全8スクレイパーのCSVエスケープに \r 除去追加 (column misalignment防止)
-     - D1 DB内の不正site_idレコード2件削除 (CSV escaping bug由来)
-  3. **Worker改善**:
-     - src/types/index.ts: suumo_chintai / suumo_baibai site ID追加
-     - wrangler.toml: MAX_RESULTS_PER_SITE 15→50
-  4. **一括実行バッチ作成**: run-all-scrapers.bat / test-all-scrapers-dryrun.bat
-- **デプロイ**: ⏳ 未 (wrangler deploy 要実行 — suumo_chintai/baibai UI表示のため)
-- **git**: push 済み (a88f7c4 → master)
-- **インポート状況** (13:00時点, 並列実行中):
-  - 開始前: 457,709件 → 現在: ~459,165件 (+1,456件/数分)
-  - kenbiya: 3,565 → 4,155 (+590) ✅実行中
-  - rakumachi: 2,178 → 2,727 (+549) ✅実行中
-  - suumo_chintai: 0 → 319 (+319) ✅実行中 (NEW)
-  - chintai/homes-all: 実行中
-- **次のタスク**:
-  1. 全スクレイパー完了後 SUUMO売買(--mode=baibai)も追加実行
-  2. wrangler deploy (suumo_chintai/baibai UI表示対応)
-  3. DB 1,000,000件達成確認
-
-## 2026-04-30 (Desktop) セッション3 — 5バグ修正デプロイ + HOME'S スクレイピング完了
-
-- **環境**: Desktop
-- **ブランチ**: master (commits 051cd64, aaaccbf)
-- **変更内容**:
-  1. **5つのコード品質バグ修正** (commit 051cd64):
-     - `admin.ts`: CSV regex (`[^,]+`) → 正規 char-by-char パーサー `splitCsvFields()` に置換 (空フィールド欠落バグ根本修正)
-     - `db/queries.ts`: `stationMinutes` WHERE句を `searchProperties` と `searchMasters` で統一 (`IS NULL OR <=`)
-     - `db/queries.ts`: `managementFeeMax` フィルター両関数に実装 (型定義済みだが未適用だった)
-     - `db/queries.ts`: `searchMasters` を sequential queries → `Promise.all` 並列化
-     - `index.tsx`: master 検索キャッシュキーをソートして正規化 (同一条件でキャッシュヒット保証)
-     - `wrangler.toml`: `ENVIRONMENT = "development"` → `"production"` 修正
-  2. **HOME'S Playwright スクレイピング追加実行**:
-     - 東京(192件)・神奈川(192件)・広島(192件)・宮城(193件) 追加取得
-     - 大阪: WAF blocked (未取得、低優先)
-- **デプロイ**: ✅ 済 — Version ID: bd397f3e-86aa-4faf-9170-5cc17db14621
-  - Exit Code: 0
-  - ENVIRONMENT: "production" 確認済み
-- **git**: push 済み (aaaccbf → master)
-- **DB現状**: ~362,000+ 件
-  - homes: 約1,000件 (12都道府県分)
-  - terass (reins+suumo+athome): 356,036件
-  - kenbiya: 3,522件 / rakumachi: ~1,516件
-  - chintai: 574件 / fudosan: 451件 / smaity: 0件
-
----
-
-## 2026-04-30 (Desktop) セッション2 — HOME'S Playwright スクレイパー完成
-
-- **環境**: Desktop
-- **ブランチ**: master (commit 68eda1d)
-- **変更内容**:
-  - **HOME'S ローカルスクレイパー (Playwright版)** を完成:
-    - `scripts/scrape-homes-local.mjs` を新規作成・コミット
-    - Node.js fetch → AWS WAF bot challenge (202) でブロックされることを確認
-    - headless Playwright Chromium → 同様にブロック
-    - **システムChromeを使用** (`channel: 'chrome'` + `--disable-blink-features=AutomationControlled`) で WAF 完全回避
-    - JSON-LD ItemList パース、100件/バッチインポート
-  - **実行結果**: 193件インポート成功
-    - WAF通過した都道府県: 愛知/埼玉/兵庫/福岡/千葉/京都/北海道
-    - WAF blocked: 東京/神奈川/大阪/広島/宮城 (IP rate limit) → 日を変えて再実行推奨
-  - **Playwright Chromiumインストール**: `npx playwright install chromium` 実施
-- **DB現状**: 362,527件 合計
-  - homes: 230件
-  - terass (reins+suumo+athome): 356,036件
-  - kenbiya: 3,522件 / rakumachi: 1,516件
-  - chintai: 574件 / fudosan: 451件 / smaity: 0件
-- **git**: push 済み (68eda1d → master)
-- **次のタスク**: homes scraper を日を変えて再実行 (東京/神奈川/大阪等を取得)
-
-## 2026-04-30 (Desktop) — パフォーマンス最適化 + 実データ収集完了
-
-- **環境**: Desktop
-- **ブランチ**: master (commits 71a215e, 852d1fe)
-- **変更内容**:
-  1. **スクレイパー CSV バグ修正 + バッチ分割** (commit 71a215e):
-     - Worker CSV parser regex バグ (`[^,]*` → `[^,]+`) を特定し、doubled-header ワークアラウンドを実装
-     - `importToWorker`/`importBatch` を 100件/バッチ分割送信に変更 (60秒タイムアウト対策)
-     - 楽待スクレイパー: 982件インポート完了 (10都道府県 × 2ページ)
-  2. **パフォーマンス大幅最適化** (commit 852d1fe):
-     - **CSV regex 根本修正**: `admin.ts` の `parseRow` regex を `[^,]+` に修正 (空文字ゴースト排除)
-     - doubled-header ワークアラウンドをスクレイパーから削除
-     - **検索クエリ最適化**: 3 sequential D1 queries → 2 parallel (COUNT(*)を廃止、site-count SUM で代替)
-     - **JOINs 除去**: searchProperties の LEFT JOIN property_images/features 削除 (GROUP BY 619K行 排除)
-     - **D1 自動アーカイブ閾値修正**: 400MB → 4096MB (正しい 5GB free tier)
-     - **LIKE→IN 変換**: `site_id LIKE 'terass_%'` を `IN('terass_reins','terass_suumo','terass_athome')` に
-     - **キャッシュキー正規化**: URLSearchParams をソートしてキャッシュヒット率向上
-  3. **実データ収集完了**:
-     - 楽待: 982件
-     - 健美家 + 不動産ジャパン: 3,955件 (計 4,937件 新規インポート)
-- **デプロイ**: ✅ 済 — Version ID: 50d0da6d-5259-40a7-95c6-7d7f45eaea63
-  - Exit Code: 0、全コミット (852d1fe, 332bb25) 反映済み
-  - 新 cron スケジュール (30 * * * *) 確認済み
-- **git**: push 済み (332bb25 → master)
-- **動作確認**:
-  - `?rooms=1LDK,2LDK&prefecture=13` → 2,912件 ✅ (多間取り選択 IN句 動作確認)
-  - 全サイト合計 362,334件 active 表示中
-- **残課題** (launch後対応):
-  - smaity: 0件 (Worker IPブロック + ページ構造がトップページ) → ローカルスクレイパー化が必要
-  - homes: 37件 (同上) → ローカルスクレイパー化
-  - fingerprint: 32bit hash (4% collision risk at scale) → 64bit 化
-  - image pipeline: N+1 D1クエリ → batch化
-
----
-
-## 2026-04-27 (Desktop) — 3モード検索UI全面再構築 + 不動産ポータルUXリサーチ反映
-
-- **環境**: Desktop
-- **ブランチ**: master (commits 64b0e1c, 6bfd034, 5b8bf66)
-- **変更内容**:
-  1. **ローカルスクレーパー修正** (commit 64b0e1c):
-     - `scrape-sites-local.mjs`: `scrapeRealestatePref` の slug パラメータ欠落バグ修正
-     - 北海道 `num: '1'` → `'01'` (JP-1 404エラー修正)
-     - 3スクレーパー dry-run 確認: 楽待984件・健美家3500件・不動産Japan414件
-  2. **/100test 改善 11件実装** (commit 6bfd034):
-     - サイト数動的生成・export-bar 条件表示・pagination range・aggregateSearch フォールバック改善
-     - 価格要相談スタイル・全サイト警告・ウェルカム初期unchecked・モバイルリストview修正
-     - stationMinutes NULL バグ修正 (db/queries.ts)・SiteId 型分離 (ActiveSiteId / DeprecatedSiteId)
-  3. **不動産ポータルUXリサーチ** (SUUMO/HOME'S/健美家/楽待 横断分析):
-     - 3モード分類・間取り複数選択・詳細フィルタアコーディオン・ソート位置等を調査・整理
-  4. **3モード検索UI全面再構築** (commit 5b8bf66):
-     - 購入/賃貸/投資 タブ: モード切替で対象サイト自動選択
-     - クイックプリセットチップ: 各モード4種 (新築/駅5分/3000万/利回り8%+等)
-     - 間取り複数選択 ドロップダウン (購入・賃貸 独立)
-     - 投資専用: 建物種別チェックボックス (一棟マンション/アパート/区分マンション等)
-     - 並び順を結果バーへ移動 (SUUMO/HOME'S準拠)
-     - サイト選択をアコーディオン折り畳みへ変更
-     - 価格上下限バリデーション + クリア後スナックバー undo機能
-- **デプロイ**: ✅ 済 — 2026-04-29 21:19 `scripts\_deploy.bat` ダブルクリックにて実行
-  - Worker URL: https://mal-search-system.navigator-187.workers.dev
-  - 3モードUI・プリセットチップ・サイトアコーディオン 動作確認済み
-- **git**: push 済み (5b8bf66 → master)
-- **次のタスク**:
-  1. ✅ ~~デプロイ~~ 完了
-  2. ⚠️ **必須**: ローカルスクレーパー実行 (実データ収集)
-     - `cd C:\Users\reale\Downloads\mal-worker && node scripts/scrape-sites-local.mjs --site=all`
-     - `node scripts/scrape-rakumachi-rss.mjs`
-  3. 検索UIの動作確認 (3モード切替・プリセット・間取り複数選択)
-
----
-
-## 2026-04-25 セッション2 (Desktop) — 全スクレイパー最適化 + マルチサイト運用実装
-
-- **環境**: Desktop
-- **ブランチ**: master (commits 8deec40, 653fbe2)
-- **変更内容**:
-  1. **スクレイパー全面最適化** (commit 653fbe2):
-     - `src/scrapers/base.ts`: User-Agent を Chrome 124 実ブラウザUAに変更 (Bot検出対策)
-     - `src/scrapers/aggregator.ts`: 47都道府県ローテーション完全実装 (月〜日 7グループ), MAX_RESULTS 15→50
-     - `src/scrapers/fudosan.ts`: 完全書き直し (realestate.co.jp + `__NEXT_DATA__` パース)
-     - `src/scrapers/smaity.ts`: 完全書き直し (3段階パース: __NEXT_DATA__ → JSON-LD → DOM)
-     - `src/scrapers/homes.ts`, `chintai.ts`, `rakumachi.ts`, `kenbiya.ts`: 最大3ページ取得対応
-  2. **ローカル深掘りスクリプト追加**:
-     - `scripts/scrape-rakumachi-rss.mjs`: 楽待RSS 4フィード → Worker API (毎日 04:30)
-     - `scripts/scrape-sites-local.mjs`: 健美家・不動産Japan ローカル深掘り (毎日 04:45)
-     - `scripts/run-rakumachi-rss.bat` / `run-local-scraper.bat`: Task Scheduler ラッパー
-  3. **REGISTER_TASKS_AS_ADMIN.bat 拡張**: MAL-Rakumachi-RSS / MAL-LocalScraper 追加
-  4. **PowerShell 運用チェックスクリプト修正**: `@()` 強制配列でシングル行 .env の Char バグ解消
-     - ADMIN_SECRET は 48文字で正常 (PowerShell の誤判定だった)
-- **デプロイ**: 未 (ユーザーが `C:\Users\reale\Downloads\mal-worker` で `wrangler deploy` 実行要)
-- **git**: push 済み (653fbe2 → master)
-- **次のタスク**:
-  1. ⚠️ `scripts\_deploy.ps1` を実行してデプロイ (または `wrangler deploy` を手動実行)
-  2. ⚠️ `REGISTER_TASKS_AS_ADMIN.bat` を管理者として実行 (新タスク MAL-Rakumachi-RSS / MAL-LocalScraper 登録)
-  3. 毎日 04:30〜04:45 の実行ログを確認: `C:\Users\reale\Downloads\rakumachi_rss.log`
-
----
-
-## 2026-04-25 (Desktop) — Task Scheduler 登録完了・運用開始
-
-- **環境**: Desktop
-- **ブランチ**: master
-- **変更内容**:
-  1. `REGISTER_TASKS_AS_ADMIN.bat` 修正: `/TR` のネスト引用符問題を `run-weekly-backfill.bat` ラッパーで解決
-  2. `scripts/run-weekly-backfill.bat` 新規作成 (週次タスク実行ラッパー)
-  3. Task Scheduler 登録完了:
-     - ✅ `TERASS_AutoImport_Daily` — 毎日 02:00 (Interactive ユーザー, 最高権限)
-     - ✅ `TERASS-PICKS-Weekly-Backfill` — 毎週日曜 03:30 (17県バックフィル)
-- **デプロイ**: 不要 (スクリプト修正のみ)
-- **運用状態**: 全自動化完了 🎉
-  - 日次: 30県 (02:00〜, 2h window) → extract → D1 import
-  - 週次: 17県 (日曜 03:30〜, 4h window) → バックフィル補完
-  - Chrome CDP セッション維持必須 (ログオン状態でスリープ可)
-- **次のタスク**: 初回 02:00 自動実行を確認 → ログ `C:\Users\reale\Downloads\terass_cron.log` で確認
+  - `src/db/queries.ts`: FTS5フォールバック関数 `runSearchQueries` の型エラーを修正
+    - `Awaited<ReturnType<typeof db.prepare>['all']>` (誤) → `_RunResult = Awaited<ReturnType<typeof runSearchQueries>>` (正)
+    - `tsc --noEmit` exit 0 確認
+  - 前セッションで実装済み (今セッションでpush):
+    - `migrations/0008_perf_fts5.sql`: FTS5仮想テーブル + 3同期トリガー + 7複合インデックス
+    - `src/db/queries.ts`: FTS5全文検索 (1M件対応) + LIKEフォールバック + 管理費/修繕積立金/向き/構造フィルタ
+    - `src/routes/admin.ts`: `/api/admin/mark-delisted` + `/api/admin/rebuild-fts` + `/api/admin/suggest-extended`
+    - `src/types/index.ts`: `SearchParams` に `repairFundMax` / `direction` / `structure` 追加
+    - `src/index.tsx`: Leafletマップタブ + 詳細フィルタUI + client-side CSV + スクロールトップ + お気に入り + 価格履歴チャート + 掲載落ち自動検知cron (30日)
+- **デプロイ**: 未 — **次のステップで必須**:
+  1. `wrangler deploy` (Desktopで実行)
+  2. `wrangler d1 execute mal-search-db --remote --file=migrations/0008_perf_fts5.sql`
+  3. `POST /api/admin/rebuild-fts` を batchSize=5000 で offset=0 から繰り返し実行 (hasMore: false まで)
+- **次のタスク**: wrangler deploy → migration 0008適用 → FTS5リビルド
 
 ---
 
@@ -1267,32 +1154,3 @@ TERASS は REINS / SUUMO / at-home 由来の生データを **自社 canonical D
   - バックフィル完走待ち (残 28 県)
   - 管理者 PS で Task Scheduler を Interactive user で再登録
   - 週次バックフィル登録 (register-weekly-backfill.ps1)
-
----
-
-## 2026-04-25 セッション3 (Desktop) — スクレイパー全修正・テスト完了
-
-- **環境**: Desktop
-- **ブランチ**: master
-- **変更内容**:
-  1. **楽待スクレイパー完全書き直し** (`scripts/scrape-rakumachi-rss.mjs`):
-     - RSS廃止 (HTTP 404) → 物件一覧ページ直スクレイプに変更
-     - URL: `/syuuekibukken/area/prefecture/dimAll/?pref={N}&limit=50&page={P}`
-     - HTMLパーサー: `<p class="propertyBlock__name">` → title, `<b class="price">` → 価格, `<b class="gross">` → 利回り
-     - **テスト結果**: ✅ 984件 (10県 × 2ページ, DRY-RUN確認)
-  2. **健美家スクレイパー修正** (`scripts/scrape-sites-local.mjs`):
-     - `<a href="/pp[0-9]+/...re_ID.../">` 直接マッチに変更 (旧: `<li>` ラッパー探索で0件)
-     - **テスト結果**: ✅ 3,500件 (14都道府県 × 5ページ × 50件/p, DRY-RUN確認)
-  3. **不動産ジャパンスクレイパー完全書き直し** (`scripts/scrape-sites-local.mjs`):
-     - URL変更: `/mansion/prefecture/{N}/buy/list/` (404) → `/en/forsale/{slug}?prefecture=JP-{num}&page={P}`
-     - 価格: JPY `¥189,800,000` → `18,980万円` 変換追加
-     - `main()` の呼び出しに `slug` パラメータ追加
-     - 北海道 num: '1' → '01' 修正 (JP-1 が 404 だったバグ)
-     - **テスト結果**: ✅ 414件 → 459件見込み (10都道府県 × 3ページ, DRY-RUN確認)
-  4. **デバッグスクリプト削除**: `_debug-rakumachi*.mjs`, `_check-secret*.ps1`
-  5. **Task Scheduler タスク登録済み**: MAL-Rakumachi-RSS (04:30), MAL-LocalScraper (04:45)
-- **デプロイ**: 不要 (ローカルスクリプトのみ変更)
-- **全スクレイパー稼働状況**: ✅ 楽待RSS・健美家・不動産ジャパン すべて正常動作確認
-- **次のタスク**:
-  - ⚠️ `scripts\_deploy.ps1` 実行 (前セッションのWorker改善をデプロイ未了)
-  - 翌朝 04:30〜04:45 の実行ログを確認: `C:\Users\reale\Downloads\mal-worker\logs\`
