@@ -6,6 +6,7 @@ import { runScheduledScrape } from '../scrapers/aggregator';
 import { archiveOldestCold } from '../services/archive';
 import { discoverTerassImages } from '../services/terass-image-fetch';
 import { buildMasters, buildAllMasters } from '../services/master-builder';
+import { getWriteDB } from '../db/queries';
 
 const admin = new Hono<{ Bindings: Bindings }>();
 
@@ -264,7 +265,7 @@ admin.post('/import-properties', async (c) => {
     return c.json({ error: 'JSON body with {properties: [...]} required' }, 400);
   }
 
-  const db = env.MAL_DB;
+  const db = getWriteDB(env);
   let imported = 0, skipped = 0, errors = 0;
 
   for (const p of properties) {
@@ -657,6 +658,8 @@ admin.post('/import', async (c) => {
 
   let importedRows = 0, skippedRows = 0, errorRows = 0;
   const errors: string[] = [];
+  // 新規 properties 書き込みは DB2 (MAL_DB2) へ。csv_imports メタデータは MAL_DB のまま。
+  const writeDb = getWriteDB(env);
 
   await env.MAL_DB.prepare(`
     INSERT OR IGNORE INTO csv_imports (id, filename, source, status, imported_at)
@@ -679,7 +682,7 @@ admin.post('/import', async (c) => {
       // session 指定時は last_seen_at と import_session_id を datetime('now') / sessionId で上書き。
       // ON CONFLICT 句でも更新して「途中失敗 = 一部だけ古い」リスクを軽減。
       const effectiveLastSeen = sessionId ? null /* SQL 側で datetime('now') を使う */ : (row['last_seen_at'] || null);
-      await env.MAL_DB.prepare(`
+      await writeDb.prepare(`
         INSERT INTO properties (
           id, site_id, site_property_id, title, property_type, status,
           prefecture, city, address, price, price_text, area,

@@ -12,6 +12,13 @@ database_name = "mal-search-db"
 database_id = "2a731ee6-d1c7-4f51-8bcc-f15f993ad870"
 migrations_dir = "migrations"
 
+# DB2: 第2シャード (DB1 が 500MB 満杯のため新規書き込みはこちらへ)
+# 2 DB × 500MB = 1GB → 最大 ~1.06M 件を完全無料で実現
+[[d1_databases]]
+binding = "MAL_DB2"
+database_name = "mal-search-db-2"
+database_id = "e2de4581-6bd4-48ff-ab33-2414c901873e"
+
 [[kv_namespaces]]
 binding = "MAL_CACHE"
 id = "91469fbf31a04241a54e0acdcb7b14c2"

@@ -1,5 +1,103 @@
 import type { D1Database } from '@cloudflare/workers-types';
-import type { Property, SearchParams, SearchResult, ScrapeJob, SiteId, MasterProperty, MasterSearchResult, SourceListing } from '../types';
+import type { Property, SearchParams, SearchResult, ScrapeJob, SiteId, MasterProperty, MasterSearchResult, SourceListing, Bindings } from '../types';
+
+// ─── マルチ DB Federation ────────────────────────────────────────────────────
+// DB1 (MAL_DB) は 500MB 満杯。新規書き込みは DB2 (MAL_DB2) へ。
+// 検索は全 DB を並列クエリしてマージ。
+
+/** DB リストを Bindings から取得 (null/undefined を除外) */
+export function getReadDBs(env: Pick<Bindings, 'MAL_DB' | 'MAL_DB2'>): D1Database[] {
+  return [env.MAL_DB, env.MAL_DB2].filter(Boolean) as D1Database[];
+}
+
+/** 新規書き込み先: DB2 が優先、なければ DB1 */
+export function getWriteDB(env: Pick<Bindings, 'MAL_DB' | 'MAL_DB2'>): D1Database {
+  return env.MAL_DB2 ?? env.MAL_DB;
+}
+
+/** インメモリで Property 配列をソート (マージ後に使用) */
+function sortProperties(props: Property[], sortBy?: string): Property[] {
+  const sorters: Record<string, (a: Property, b: Property) => number> = {
+    price_asc:  (a, b) => (a.price ?? 1e15) - (b.price ?? 1e15),
+    price_desc: (a, b) => (b.price ?? -1) - (a.price ?? -1),
+    area_asc:   (a, b) => (a.area ?? 1e15) - (b.area ?? 1e15),
+    area_desc:  (a, b) => (b.area ?? -1) - (a.area ?? -1),
+    yield_desc: (a, b) => (b.yieldRate ?? -1) - (a.yieldRate ?? -1),
+    newest:     (a, b) => b.scrapedAt.localeCompare(a.scrapedAt),
+    relevance:  (a, b) => b.scrapedAt.localeCompare(a.scrapedAt),
+  };
+  const fn = sorters[sortBy ?? 'newest'] ?? sorters.newest;
+  return [...props].sort(fn);
+}
+
+/**
+ * 全 DB を並列検索してマージ。
+ * ページネーション: 各 DB から page*limit 件ずつ取得 → マージ → slice。
+ */
+export async function searchPropertiesFederated(
+  env: Pick<Bindings, 'MAL_DB' | 'MAL_DB2'>,
+  params: SearchParams,
+): Promise<SearchResult> {
+  const dbs = getReadDBs(env);
+  const startTime = Date.now();
+  const page   = params.page  ?? 1;
+  const limit  = Math.min(params.limit ?? 20, 100);
+  const offset = (page - 1) * limit;
+
+  if (dbs.length === 1) {
+    // シングル DB のときはそのまま (高速パス)
+    return searchProperties(dbs[0], params);
+  }
+
+  // 各 DB から先頭 page*limit 件ずつ取得 (マージ後に正確なスライスが可能)
+  const fetchParams: SearchParams = { ...params, page: 1, limit: page * limit };
+  const allResults = await Promise.all(
+    dbs.map(db => searchProperties(db, fetchParams).catch(() => null))
+  );
+  const valid = allResults.filter(Boolean) as SearchResult[];
+  if (valid.length === 0) throw new Error('All DBs failed');
+
+  // 合計件数は各 DB の total を合算
+  const total = valid.reduce((sum, r) => sum + r.total, 0);
+
+  // サイト別件数をマージ
+  const siteMap = new Map<SiteId, number>();
+  for (const r of valid) {
+    for (const s of r.sites) {
+      siteMap.set(s.siteId, (siteMap.get(s.siteId) ?? 0) + s.count);
+    }
+  }
+  const sites = Array.from(siteMap.entries()).map(([siteId, count]) => ({
+    siteId, count, status: 'success' as const, executionTimeMs: Date.now() - startTime,
+  }));
+
+  // 全件マージ → ソート → ページスライス
+  const merged = sortProperties(valid.flatMap(r => r.properties), params.sortBy);
+  const properties = merged.slice(offset, offset + limit);
+
+  return {
+    properties,
+    total,
+    page,
+    limit,
+    totalPages: Math.ceil(total / limit),
+    sites,
+    executionTimeMs: Date.now() - startTime,
+    cacheHit: false,
+  };
+}
+
+/**
+ * 全 DB から ID で物件を検索 (どの DB にあるか不明なため全 DB を並列チェック)
+ */
+export async function getPropertyByIdFederated(
+  env: Pick<Bindings, 'MAL_DB' | 'MAL_DB2'>,
+  id: string,
+): Promise<Property | null> {
+  const dbs = getReadDBs(env);
+  const results = await Promise.all(dbs.map(db => getPropertyById(db, id).catch(() => null)));
+  return results.find(Boolean) ?? null;
+}
 
 export async function searchProperties(
   db: D1Database,

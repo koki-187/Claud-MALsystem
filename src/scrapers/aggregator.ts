@@ -1,6 +1,7 @@
 import type { Property, SearchParams, SiteId, SiteSearchResult, PrefectureCode } from '../types';
 import type { Bindings } from '../types';
 import { enqueueAll } from '../services/image-pipeline';
+import { getWriteDB } from '../db/queries';
 import type { BaseScraper } from './base';
 import { HomesScraper } from './homes';
 import { FudosanScraper } from './fudosan';
@@ -178,6 +179,9 @@ export async function runScheduledScrape(env: Bindings): Promise<{
 
   let total = 0, newCount = 0, updatedCount = 0, soldCount = 0;
   const errors: string[] = [];
+  // DB1 (MAL_DB) は 500MB 上限到達のため read-only。新規 properties/price_history 書き込みは DB2 へ。
+  // scrape_jobs テーブルは DB1 のまま (管理メタデータ)。
+  const writeDb = getWriteDB(env);
 
   for (const prefecture of targetPrefectures) {
     if (!prefecture) continue; // Sun rotation の空文字スキップ
@@ -210,7 +214,8 @@ export async function runScheduledScrape(env: Bindings): Promise<{
         let jobNew = 0, jobUpdated = 0, jobSold = 0;
 
         // Get existing active property IDs for this site+prefecture (for new/updated counting)
-        const existingRows = await env.MAL_DB
+        // writeDb (DB2) のみ確認 — DB1 の既存レコードは DB1 が full なので更新不可。
+        const existingRows = await writeDb
           .prepare(
             `SELECT site_property_id FROM properties
              WHERE site_id = ? AND prefecture = ? AND status = 'active'`
@@ -224,7 +229,7 @@ export async function runScheduledScrape(env: Bindings): Promise<{
 
         // ── Upsert scraped properties (P2 #11: バッチ化で N+1 解消) ──────────
         // 旧: 1 物件あたり 2 ラウンドトリップ × 最大 15 物件 × 9 サイト × 47 都道府県 = 12,690 順次クエリ
-        // 新: 50 件ずつまとめて env.MAL_DB.batch() に投入 → ラウンドトリップ ~1/50
+        // 新: 50 件ずつまとめて writeDb.batch() に投入 → ラウンドトリップ ~1/50
         const upsertSql = `
           INSERT INTO properties (
             id, site_id, site_property_id, title, property_type, status,
@@ -256,7 +261,7 @@ export async function runScheduledScrape(env: Bindings): Promise<{
           const isNew = !existingSet.has(prop.sitePropertyId);
           if (isNew) jobNew++; else jobUpdated++;
 
-          stmts.push(env.MAL_DB.prepare(upsertSql).bind(
+          stmts.push(writeDb.prepare(upsertSql).bind(
             id, prop.siteId, prop.sitePropertyId, prop.title, prop.propertyType,
             prop.prefecture, prop.city ?? '', prop.address ?? null,
             prop.price ?? null, prop.priceText ?? '', prop.area ?? null,
@@ -268,17 +273,18 @@ export async function runScheduledScrape(env: Bindings): Promise<{
             prop.fingerprint ?? null
           ));
           if (prop.price !== null) {
-            stmts.push(env.MAL_DB.prepare(priceHistorySql).bind(id, prop.price, today));
+            stmts.push(writeDb.prepare(priceHistorySql).bind(id, prop.price, today));
           }
         }
         // 50 文ずつチャンク実行 (D1 batch のオーバーヘッドを抑えつつ単発失敗の影響を局所化)
         for (let i = 0; i < stmts.length; i += 50) {
-          await env.MAL_DB.batch(stmts.slice(i, i + 50));
+          await writeDb.batch(stmts.slice(i, i + 50));
         }
 
         // ── Mark sold: active properties not seen in the last 48 hours ────────
+        // DB2 (writeDb) のみ対象。DB1 は full で書き込み不可のため sold マークは省略。
         const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
-        const soldResult = await env.MAL_DB.prepare(`
+        const soldResult = await writeDb.prepare(`
           UPDATE properties
           SET status = 'sold', sold_at = datetime('now'), updated_at = datetime('now')
           WHERE site_id = ? AND prefecture = ? AND status = 'active'

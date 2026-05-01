@@ -292,6 +292,8 @@ export interface MasterSearchResult {
 
 export interface Bindings {
   MAL_DB: D1Database;
+  /** 第2 D1 シャード。DB1 が 500MB 満杯のため新規書き込みはこちらへ。検索は DB1+DB2 並列。*/
+  MAL_DB2: D1Database;
   MAL_CACHE: KVNamespace;
   MAL_STORAGE: R2Bucket;
   ENVIRONMENT: string;

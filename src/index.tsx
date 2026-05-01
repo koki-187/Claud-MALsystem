@@ -4,7 +4,7 @@ import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 import { timing } from 'hono/timing';
 import type { Bindings, AppVariables } from './types';
-import { searchProperties, getPropertyById, getStats, logSearch, searchMasters } from './db/queries';
+import { searchProperties, getPropertyById, getStats, logSearch, searchMasters, searchPropertiesFederated, getPropertyByIdFederated, getReadDBs } from './db/queries';
 import { aggregateSearch, runScheduledScrape } from './scrapers/aggregator';
 import { PREFECTURES, SITES } from './types';
 import { admin as adminRoutes } from './routes/admin';
@@ -113,7 +113,7 @@ app.get('/api/search', async (c) => {
     const cached = await c.env.MAL_CACHE.get(cacheKey, 'json').catch(() => null);
     if (cached) return c.json({ ...(cached as object), cacheHit: true });
 
-    const dbResult = await searchProperties(c.env.MAL_DB, params).catch(() => null);
+    const dbResult = await searchPropertiesFederated(c.env, params).catch(() => null);
     if (dbResult && dbResult.total > 0) {
       await c.env.MAL_CACHE.put(cacheKey, JSON.stringify(dbResult), { expirationTtl: 3600 }).catch(() => {});
       logSearch(c.env.MAL_DB, params, dbResult.total, Date.now() - startTime).catch(() => {});
@@ -124,11 +124,16 @@ app.get('/api/search', async (c) => {
     // 条件を絞りすぎた検索 (例: 築1年以内+利回り12%以上) でDBが0件を返しても、
     // 県データが存在するなら空結果をそのまま返す (不要なスクレイプを防ぐ)。
     if (params.prefecture) {
-      const hasData = await c.env.MAL_DB
-        .prepare("SELECT 1 FROM properties WHERE prefecture = ? AND status = 'active' LIMIT 1")
-        .bind(params.prefecture)
-        .first()
-        .catch(() => null);
+      const dbs = getReadDBs(c.env);
+      const hasDataResults = await Promise.all(
+        dbs.map(db => db
+          .prepare("SELECT 1 FROM properties WHERE prefecture = ? AND status = 'active' LIMIT 1")
+          .bind(params.prefecture)
+          .first()
+          .catch(() => null)
+        )
+      );
+      const hasData = hasDataResults.some(Boolean);
       if (hasData) {
         // 県データはあるがフィルター条件に一致なし → 空結果を返す
         const emptyResult = {
@@ -163,7 +168,7 @@ app.get('/api/search', async (c) => {
 app.get('/api/properties/:id', async (c) => {
   const id = c.req.param('id');
   try {
-    const property = await getPropertyById(c.env.MAL_DB, id);
+    const property = await getPropertyByIdFederated(c.env, id);
     if (!property) return c.json({ error: 'Property not found' }, 404);
     return c.json(property);
   } catch (error) {
@@ -247,18 +252,19 @@ app.get('/api/suggest', async (c) => {
   if (!q || q.length < 2) return c.json({ suggestions: [] });
   try {
     const like = `%${q}%`;
-    const [cities, stations] = await Promise.all([
-      c.env.MAL_DB
-        .prepare("SELECT DISTINCT city as val FROM properties WHERE city LIKE ? AND status='active' LIMIT 7")
-        .bind(like).all<{ val: string }>(),
-      c.env.MAL_DB
-        .prepare("SELECT DISTINCT station as val FROM properties WHERE station LIKE ? AND status='active' AND station IS NOT NULL LIMIT 5")
-        .bind(like).all<{ val: string }>(),
-    ]);
-    const suggestions = [
-      ...(cities.results ?? []).map(r => r.val),
-      ...(stations.results ?? []).map(r => r.val),
-    ].filter(Boolean);
+    const dbs = getReadDBs(c.env);
+    const suggestResults = await Promise.all(dbs.map(db => Promise.all([
+      db.prepare("SELECT DISTINCT city as val FROM properties WHERE city LIKE ? AND status='active' LIMIT 7")
+        .bind(like).all<{ val: string }>().catch(() => ({ results: [] as { val: string }[] })),
+      db.prepare("SELECT DISTINCT station as val FROM properties WHERE station LIKE ? AND status='active' AND station IS NOT NULL LIMIT 5")
+        .bind(like).all<{ val: string }>().catch(() => ({ results: [] as { val: string }[] })),
+    ])));
+    const suggestions = Array.from(new Set(
+      suggestResults.flatMap(([cities, stations]) => [
+        ...(cities.results ?? []).map(r => r.val),
+        ...(stations.results ?? []).map(r => r.val),
+      ])
+    )).filter(Boolean).slice(0, 12);
     return c.json({ suggestions });
   } catch {
     return c.json({ suggestions: [] });
