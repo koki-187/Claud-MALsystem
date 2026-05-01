@@ -5,6 +5,22 @@
 
 ---
 
+## 2026-05-01 02:55 (Desktop) — parseRow CSVバグ修正・デプロイ完了
+
+- **環境**: Desktop
+- **ブランチ**: master (commit d3863ee)
+- **変更内容**:
+  - `src/routes/admin.ts`: `parseRow` 関数のCSVパース修正
+    - 旧: `/("(?:[^"]|"")*"|[^,]*)/g` regex → カンマ位置に空文字マッチ → フィールドインデックスずれ → `imported=0 skipped=100`
+    - 新: ステートマシンベースの正確なCSV分割 → `imported=100 skipped=0` ✅
+  - デプロイ: Version `82e88176` @ `mal-search-system.navigator-187.workers.dev`
+- **確認**:
+  - `/api/stats`: 総件数 529,709件 (DB1+DB2フェデレーション正常)
+  - suumo_baibai scraper: `imported=100 skipped=0` ✅ (修正後バッチ)
+  - suumo_chintai scraper: 埼玉 3,700+件 スクレイプ継続中
+- **デプロイ**: 済
+- **次のタスク**: 両スクレイパーの全都道府県完走まで監視
+
 ## 2026-05-01 (Desktop) — スクレイパー進捗確認・DB復旧・追加スクレイパー起動
 
 - **環境**: Desktop
