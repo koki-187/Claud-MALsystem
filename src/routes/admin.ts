@@ -81,83 +81,55 @@ async function getR2SizeMb(env: Bindings): Promise<{ mb: number; objectCount: nu
 }
 
 // ─── GET /api/admin/stats ─────────────────────────────────────────────────────
-// Multi-DB Federation 対応: properties 系は DB1+DB2 を並列集計。
-// 管理テーブル (scrape_jobs / csv_imports / download_queue 等) は DB1 のみ。
 admin.get('/stats', async (c) => {
-  const db1 = c.env.MAL_DB;
-  const db2 = c.env.MAL_DB2 ?? null;
+  const db = c.env.MAL_DB;
 
-  // ── DB1 専用クエリ (管理テーブルは DB1 のみ) ──────────────────────────
   const [
+    activeRow, soldRow, delistedRow, totalRow, dupRow,
     totalImgRow, dlImgRow, pendingDlRow, mysokuRow, txnRow,
-    lastScrapeRow, lastCsvRow,
-    dbSizeMb1, r2Size,
+    siteRows, prefRows, lastScrapeRow, lastCsvRow,
+    dbSizeMb, r2Size,
   ] = await Promise.all([
-    safeFirst<{ cnt: number }>(db1.prepare(`SELECT COUNT(*) as cnt FROM property_images`)),
-    safeFirst<{ cnt: number }>(db1.prepare(`SELECT COUNT(*) as cnt FROM property_images WHERE download_status='downloaded'`)),
-    safeFirst<{ cnt: number }>(db1.prepare(`SELECT COUNT(*) as cnt FROM download_queue WHERE status='pending'`)),
-    safeFirst<{ cnt: number }>(db1.prepare(`SELECT COUNT(*) as cnt FROM property_mysoku`)),
-    safeFirst<{ cnt: number }>(db1.prepare(`SELECT COUNT(*) as cnt FROM transaction_records`)),
-    safeFirst<{ val: string | null }>(db1.prepare(`SELECT MAX(completed_at) as val FROM scrape_jobs WHERE status='completed'`)),
-    safeFirst<{ val: string | null }>(db1.prepare(`SELECT MAX(completed_at) as val FROM csv_imports WHERE status='completed'`)),
-    getD1SizeMb(db1),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active'`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='sold'`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='delisted'`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(DISTINCT fingerprint) as cnt FROM properties WHERE fingerprint IS NOT NULL`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM property_images`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM property_images WHERE download_status='downloaded'`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM download_queue WHERE status='pending'`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM property_mysoku`)),
+    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM transaction_records`)),
+    safeAll<{ site_id: SiteId; cnt: number; sold_cnt: number }>(db.prepare(`SELECT site_id, COUNT(*) as cnt, COUNT(CASE WHEN status='sold' THEN 1 END) as sold_cnt FROM properties GROUP BY site_id`)),
+    safeAll<{ prefecture: PrefectureCode; cnt: number }>(db.prepare(`SELECT prefecture, COUNT(*) as cnt FROM properties WHERE status='active' GROUP BY prefecture ORDER BY cnt DESC LIMIT 20`)),
+    safeFirst<{ val: string | null }>(db.prepare(`SELECT MAX(completed_at) as val FROM scrape_jobs WHERE status='completed'`)),
+    safeFirst<{ val: string | null }>(db.prepare(`SELECT MAX(completed_at) as val FROM csv_imports WHERE status='completed'`)),
+    getD1SizeMb(db),
     getR2SizeMb(c.env),
   ]);
 
-  // ── properties カウント: DB1+DB2 並列 ──────────────────────────────────
-  async function getPropCounts(db: D1Database) {
-    const [active, sold, delisted, total, dup, sites, prefs] = await Promise.all([
-      safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active'`)),
-      safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='sold'`)),
-      safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='delisted'`)),
-      safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties`)),
-      safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(DISTINCT fingerprint) as cnt FROM properties WHERE fingerprint IS NOT NULL`)),
-      safeAll<{ site_id: SiteId; cnt: number; sold_cnt: number }>(db.prepare(`SELECT site_id, COUNT(*) as cnt, COUNT(CASE WHEN status='sold' THEN 1 END) as sold_cnt FROM properties GROUP BY site_id`)),
-      safeAll<{ prefecture: PrefectureCode; cnt: number }>(db.prepare(`SELECT prefecture, COUNT(*) as cnt FROM properties WHERE status='active' GROUP BY prefecture ORDER BY cnt DESC LIMIT 20`)),
-    ]);
-    return { active: active?.cnt ?? 0, sold: sold?.cnt ?? 0, delisted: delisted?.cnt ?? 0,
-             total: total?.cnt ?? 0, dup: dup?.cnt ?? 0,
-             sites: sites.results ?? [], prefs: prefs.results ?? [] };
-  }
-
-  const [c1, c2] = await Promise.all([
-    getPropCounts(db1),
-    db2 ? getPropCounts(db2).catch(() => null) : Promise.resolve(null),
-  ]);
-
-  // 合算
-  const activeProperties   = c1.active   + (c2?.active   ?? 0);
-  const soldProperties     = c1.sold     + (c2?.sold     ?? 0);
-  const delistedProperties = c1.delisted + (c2?.delisted ?? 0);
-  const totalProperties    = c1.total    + (c2?.total    ?? 0);
-  const duplicateGroups    = c1.dup      + (c2?.dup      ?? 0);
-
-  // site breakdown 合算
-  const siteMap = new Map<SiteId, { count: number; sold: number }>();
-  for (const r of [...c1.sites, ...(c2?.sites ?? [])]) {
-    const prev = siteMap.get(r.site_id as SiteId) ?? { count: 0, sold: 0 };
-    siteMap.set(r.site_id as SiteId, { count: prev.count + r.cnt, sold: prev.sold + r.sold_cnt });
-  }
-  // prefecture breakdown 合算
-  const prefMap = new Map<PrefectureCode, number>();
-  for (const r of [...c1.prefs, ...(c2?.prefs ?? [])]) {
-    prefMap.set(r.prefecture, (prefMap.get(r.prefecture) ?? 0) + r.cnt);
-  }
-  const dbSizeMb2 = db2 ? await getD1SizeMb(db2).catch(() => 0) : 0;
-
   const stats: AdminStats = {
-    activeProperties, soldProperties, delistedProperties, totalProperties, duplicateGroups,
-    totalImages:      totalImgRow?.cnt ?? 0,
-    downloadedImages: dlImgRow?.cnt ?? 0,
-    pendingDownloads: pendingDlRow?.cnt ?? 0,
-    totalMysoku:      mysokuRow?.cnt ?? 0,
-    totalTransactions: txnRow?.cnt ?? 0,
+    activeProperties:    activeRow?.cnt ?? 0,
+    soldProperties:      soldRow?.cnt ?? 0,
+    delistedProperties:  delistedRow?.cnt ?? 0,
+    totalProperties:     totalRow?.cnt ?? 0,
+    duplicateGroups:     dupRow?.cnt ?? 0,
+    totalImages:         totalImgRow?.cnt ?? 0,
+    downloadedImages:    dlImgRow?.cnt ?? 0,
+    pendingDownloads:    pendingDlRow?.cnt ?? 0,
+    totalMysoku:         mysokuRow?.cnt ?? 0,
+    totalTransactions:   txnRow?.cnt ?? 0,
     r2StorageEstimatedMb: r2Size.mb,
-    dbSizeEstimatedMb: dbSizeMb1 + dbSizeMb2,
-    siteBreakdown: Array.from(siteMap.entries()).map(([siteId, v]) => ({ siteId, count: v.count, sold: v.sold })),
-    prefectureBreakdown: Array.from(prefMap.entries())
-      .map(([prefecture, count]) => ({ prefecture, count }))
-      .sort((a, b) => b.count - a.count).slice(0, 20),
+    dbSizeEstimatedMb:    dbSizeMb,
+    siteBreakdown: (siteRows.results ?? []).map(r => ({
+      siteId: r.site_id,
+      count:  r.cnt,
+      sold:   r.sold_cnt,
+    })),
+    prefectureBreakdown: (prefRows.results ?? []).map(r => ({
+      prefecture: r.prefecture,
+      count:      r.cnt,
+    })),
     lastScrapeAt:    lastScrapeRow?.val ?? null,
     lastCsvImportAt: lastCsvRow?.val ?? null,
   };
@@ -245,124 +217,6 @@ admin.get('/export.csv', async (c) => {
   })());
 
   return new Response(readable, { headers });
-});
-
-// ─── POST /api/admin/import-properties ───────────────────────────────────────
-// スクレイパーからのJSONプロパティ直接インポート (camelCase対応)
-admin.post('/import-properties', async (c) => {
-  const env = c.env;
-
-  type PropInput = {
-    siteId?: string; site_id?: string;
-    sitePropertyId?: string; site_property_id?: string;
-    title?: string;
-    propertyType?: string; property_type?: string;
-    status?: string;
-    prefecture?: string;
-    city?: string;
-    address?: string;
-    price?: number | string | null;
-    priceText?: string; price_text?: string;
-    area?: number | string | null;
-    rooms?: string | null;
-    age?: number | string | null;
-    floor?: number | string | null;
-    station?: string | null;
-    stationMinutes?: number | string | null; station_minutes?: number | string | null;
-    managementFee?: number | string | null; management_fee?: number | string | null;
-    repairFund?: number | string | null; repair_fund?: number | string | null;
-    direction?: string | null;
-    structure?: string | null;
-    yieldRate?: number | string | null; yield_rate?: number | string | null;
-    thumbnailUrl?: string | null; thumbnail_url?: string | null;
-    detailUrl?: string; detail_url?: string;
-    description?: string | null;
-    fingerprint?: string | null;
-    latitude?: number | string | null;
-    longitude?: number | string | null;
-    listedAt?: string | null; listed_at?: string | null;
-    soldAt?: string | null; sold_at?: string | null;
-  };
-
-  let properties: PropInput[];
-  try {
-    const body = await c.req.json<{ properties: PropInput[] }>();
-    properties = body.properties;
-    if (!Array.isArray(properties)) throw new Error('properties must be array');
-  } catch {
-    return c.json({ error: 'JSON body with {properties: [...]} required' }, 400);
-  }
-
-  const db = getWriteDB(env);
-  let imported = 0, skipped = 0, errors = 0;
-
-  for (const p of properties) {
-    const siteId = p.siteId ?? p.site_id ?? '';
-    const sitePropertyId = p.sitePropertyId ?? p.site_property_id ?? '';
-    if (!siteId || !sitePropertyId) { skipped++; continue; }
-
-    const id = `${siteId}_${sitePropertyId}`;
-    const num = (v: unknown) => (v !== null && v !== undefined && v !== '') ? Number(v) : null;
-    const str = (v: unknown) => (v !== null && v !== undefined) ? String(v) : null;
-
-    try {
-      await db.prepare(`
-        INSERT INTO properties (
-          id, site_id, site_property_id, title, property_type, status,
-          prefecture, city, address, price, price_text, area,
-          rooms, age, floor, station, station_minutes,
-          management_fee, repair_fund, direction, structure,
-          yield_rate, thumbnail_url, detail_url, description,
-          fingerprint, latitude, longitude,
-          listed_at, sold_at, last_seen_at, import_session_id,
-          created_at, updated_at, scraped_at
-        ) VALUES (
-          ?, ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?,
-          ?, ?, ?, ?,
-          ?, ?, ?, ?,
-          ?, ?, ?,
-          ?, ?, datetime('now'), null,
-          datetime('now'), datetime('now'), datetime('now')
-        )
-        ON CONFLICT(site_id, site_property_id) DO UPDATE SET
-          title          = excluded.title,
-          price          = excluded.price,
-          price_text     = excluded.price_text,
-          status         = excluded.status,
-          description    = excluded.description,
-          fingerprint    = excluded.fingerprint,
-          yield_rate     = excluded.yield_rate,
-          thumbnail_url  = excluded.thumbnail_url,
-          last_seen_at   = datetime('now'),
-          updated_at     = datetime('now')
-      `).bind(
-        id, siteId, sitePropertyId,
-        str(p.title) ?? '', str(p.propertyType ?? p.property_type) ?? 'other', str(p.status) ?? 'active',
-        str(p.prefecture) ?? '13', str(p.city) ?? '', str(p.address),
-        num(p.price), str(p.priceText ?? p.price_text) ?? '',
-        num(p.area),
-        str(p.rooms),
-        num(p.age), num(p.floor),
-        str(p.station), num(p.stationMinutes ?? p.station_minutes),
-        num(p.managementFee ?? p.management_fee), num(p.repairFund ?? p.repair_fund),
-        str(p.direction), str(p.structure),
-        num(p.yieldRate ?? p.yield_rate),
-        str(p.thumbnailUrl ?? p.thumbnail_url), str(p.detailUrl ?? p.detail_url) ?? '',
-        str(p.description),
-        str(p.fingerprint),
-        num(p.latitude), num(p.longitude),
-        str(p.listedAt ?? p.listed_at), str(p.soldAt ?? p.sold_at),
-      ).run();
-      imported++;
-    } catch (e) {
-      errors++;
-      console.error(`[import-properties] error on ${id}:`, e);
-    }
-  }
-
-  return c.json({ imported, skipped, errors });
 });
 
 // ─── POST /api/admin/import/session/start ────────────────────────────────────
@@ -454,14 +308,14 @@ admin.post('/import/session/complete', async (c) => {
     const m = CAT_MAP[key]!;
     const candRow = await safeFirst<{ cnt: number }>(db.prepare(`
       SELECT COUNT(*) as cnt FROM properties
-      WHERE site_id IN ('terass_reins', 'terass_suumo', 'terass_athome')
+      WHERE site_id LIKE 'terass_%'
         AND property_type = ?
         AND status = 'active'
         AND (import_session_id IS NULL OR import_session_id != ?)
     `).bind(m.property_type, sessionId));
     const totalRow = await safeFirst<{ cnt: number }>(db.prepare(`
       SELECT COUNT(*) as cnt FROM properties
-      WHERE site_id IN ('terass_reins', 'terass_suumo', 'terass_athome')
+      WHERE site_id LIKE 'terass_%'
         AND property_type = ?
         AND status = 'active'
     `).bind(m.property_type));
@@ -506,7 +360,7 @@ admin.post('/import/session/complete', async (c) => {
     const r = await db.prepare(`
       UPDATE properties
       SET status='delisted', sold_at=datetime('now'), updated_at=datetime('now')
-      WHERE site_id IN ('terass_reins', 'terass_suumo', 'terass_athome')
+      WHERE site_id LIKE 'terass_%'
         AND property_type = ?
         AND status = 'active'
         AND (import_session_id IS NULL OR import_session_id != ?)
@@ -527,102 +381,6 @@ admin.post('/import/session/complete', async (c) => {
     sessionId, dryRun: false, aborted: false,
     ratio: overallRatio, byCategory, totalMarkedDelisted: totalMarked,
   });
-});
-
-// ─── POST /api/admin/mark-delisted ───────────────────────────────────────────
-// 最終確認日時が古い物件を delisted に一括変更 (掲載落ち自動検知)
-// Body: { days?: number } — デフォルト 30日
-admin.post('/mark-delisted', async (c) => {
-  const db = c.env.MAL_DB;
-  const body = await c.req.json<{ days?: number }>().catch(() => ({ days: 30 })) as { days?: number };
-  const days = Math.max(1, Math.min(Number(body?.days ?? 30), 365));
-
-  const result = await db.prepare(`
-    UPDATE properties
-    SET status = 'delisted', updated_at = datetime('now')
-    WHERE status = 'active'
-      AND last_seen_at IS NOT NULL
-      AND last_seen_at < datetime('now', '-' || ? || ' days')
-  `).bind(days).run();
-
-  const changes = (result.meta?.changes as number | undefined) ?? 0;
-  return c.json({ delisted: changes, days, message: `${changes}件を掲載落ちとしてマークしました` });
-});
-
-// ─── POST /api/admin/rebuild-fts ─────────────────────────────────────────────
-// FTS5仮想テーブルを既存 properties から再構築 (migration 0008 適用後に1回実行)
-// 大量データは batchSize 単位で分割処理 (30s CPU制限対策)
-admin.post('/rebuild-fts', async (c) => {
-  const db = c.env.MAL_DB;
-  const body = await c.req.json<{ batchSize?: number; offset?: number }>().catch(() => ({ batchSize: 5000, offset: 0 })) as { batchSize?: number; offset?: number };
-  const batchSize = Math.min(Number(body?.batchSize ?? 5000), 10000);
-  const startOffset = Math.max(0, Number(body?.offset ?? 0));
-
-  // 既存FTSインデックスを削除してから再挿入 (offset=0のときのみ)
-  if (startOffset === 0) {
-    try {
-      await db.prepare(`DELETE FROM properties_fts`).run();
-    } catch { /* table may not exist yet */ }
-  }
-
-  const rows = await db.prepare(`
-    SELECT rowid, title, address, city, station, description
-    FROM properties
-    ORDER BY rowid
-    LIMIT ? OFFSET ?
-  `).bind(batchSize, startOffset).all<{
-    rowid: number; title: string; address: string | null;
-    city: string | null; station: string | null; description: string | null;
-  }>();
-
-  const items = rows.results ?? [];
-  let inserted = 0;
-  for (const row of items) {
-    try {
-      await db.prepare(`
-        INSERT INTO properties_fts(rowid, title, address, city, station, description)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).bind(
-        row.rowid,
-        row.title ?? '',
-        row.address ?? '',
-        row.city ?? '',
-        row.station ?? '',
-        row.description ?? ''
-      ).run();
-      inserted++;
-    } catch { /* skip duplicate rowid */ }
-  }
-
-  const nextOffset = startOffset + items.length;
-  const hasMore = items.length === batchSize;
-
-  return c.json({
-    inserted, batchSize, offset: startOffset, nextOffset,
-    hasMore,
-    message: hasMore
-      ? `${inserted}件挿入。次のバッチ: POST /api/admin/rebuild-fts { "offset": ${nextOffset} }`
-      : `FTS5再構築完了 (total offset: ${nextOffset})`,
-  });
-});
-
-// ─── GET /api/admin/suggest-extended ─────────────────────────────────────────
-// city + station 両方を対象としたサジェスト (公開/api/suggest の拡張版)
-admin.get('/suggest-extended', async (c) => {
-  const q = c.req.query('q') ?? '';
-  if (!q || q.length < 2) return c.json({ suggestions: [] });
-  const db = c.env.MAL_DB;
-  const [cities, stations] = await Promise.all([
-    db.prepare(`SELECT DISTINCT city as val FROM properties WHERE city LIKE ? AND status='active' LIMIT 8`)
-      .bind(`%${q}%`).all<{ val: string }>(),
-    db.prepare(`SELECT DISTINCT station as val FROM properties WHERE station LIKE ? AND status='active' AND station IS NOT NULL LIMIT 6`)
-      .bind(`%${q}%`).all<{ val: string }>(),
-  ]);
-  const suggestions = [
-    ...(cities.results ?? []).map(r => r.val),
-    ...(stations.results ?? []).map(r => r.val),
-  ].filter(Boolean);
-  return c.json({ suggestions });
 });
 
 // ─── POST /api/admin/import ───────────────────────────────────────────────────
@@ -654,45 +412,49 @@ admin.post('/import', async (c) => {
   const headerLine = lines[0].split(',').map(h => h.trim().replace(/^"|"$/g, ''));
   const colIdx = (name: string) => headerLine.indexOf(name);
 
-  // Proper CSV field splitter — handles empty fields (,,) and quoted strings with commas/newlines
-  function splitCsvFields(line: string): string[] {
-    const fields: string[] = [];
-    let inQuote = false;
-    let current = '';
-    for (let i = 0; i < line.length; i++) {
-      const ch = line[i];
-      if (ch === '"') {
-        if (inQuote && line[i + 1] === '"') { current += '"'; i++; } // escaped quote ""
-        else { inQuote = !inQuote; }
-      } else if (ch === ',' && !inQuote) {
-        fields.push(current.trim());
-        current = '';
-      } else {
-        current += ch;
-      }
-    }
-    fields.push(current.trim()); // last field
-    return fields;
-  }
-
   function parseRow(line: string): Record<string, string> {
     const result: Record<string, string> = {};
-    const fields = splitCsvFields(line);
+    // 正しいCSV分割: カンマ区切り・クォート対応のステートマシン実装
+    const fields: string[] = [];
+    let cur = '';
+    let inQuote = false;
+    for (let ci = 0; ci < line.length; ci++) {
+      const ch = line[ci];
+      if (inQuote) {
+        if (ch === '"') {
+          if (line[ci + 1] === '"') { cur += '"'; ci++; }
+          else { inQuote = false; }
+        } else {
+          cur += ch;
+        }
+      } else {
+        if (ch === '"') { inQuote = true; }
+        else if (ch === ',') { fields.push(cur); cur = ''; }
+        else { cur += ch; }
+      }
+    }
+    fields.push(cur);
     headerLine.forEach((col, i) => {
-      result[col] = fields[i] ?? '';
+      result[col] = (fields[i] ?? '').trim();
     });
     return result;
   }
 
   let importedRows = 0, skippedRows = 0, errorRows = 0;
   const errors: string[] = [];
-  // 新規 properties 書き込みは DB2 (MAL_DB2) へ。csv_imports メタデータは MAL_DB のまま。
-  const writeDb = getWriteDB(env);
+  // 新規 properties 書き込みは DB2 (getWriteDB) へ。
+  // csv_imports メタデータは MAL_DB (DB1) だが DB1 が Cloudflare size_after で満杯の場合は
+  // try-catch で無視してインポートを継続する (metadata は optional)。
+  const writeDbImport = getWriteDB(env);
 
-  await env.MAL_DB.prepare(`
-    INSERT OR IGNORE INTO csv_imports (id, filename, source, status, imported_at)
-    VALUES (?, ?, 'manual', 'processing', datetime('now'))
-  `).bind(importId, file.name).run();
+  try {
+    await env.MAL_DB.prepare(`
+      INSERT OR IGNORE INTO csv_imports (id, filename, source, status, imported_at)
+      VALUES (?, ?, 'manual', 'processing', datetime('now'))
+    `).bind(importId, file.name).run();
+  } catch (e) {
+    console.warn('[admin/import] csv_imports insert skipped (DB1 full?):', e instanceof Error ? e.message : e);
+  }
 
   for (let i = 1; i < lines.length; i++) {
     const row = parseRow(lines[i]);
@@ -710,7 +472,7 @@ admin.post('/import', async (c) => {
       // session 指定時は last_seen_at と import_session_id を datetime('now') / sessionId で上書き。
       // ON CONFLICT 句でも更新して「途中失敗 = 一部だけ古い」リスクを軽減。
       const effectiveLastSeen = sessionId ? null /* SQL 側で datetime('now') を使う */ : (row['last_seen_at'] || null);
-      await writeDb.prepare(`
+      await writeDbImport.prepare(`
         INSERT INTO properties (
           id, site_id, site_property_id, title, property_type, status,
           prefecture, city, address, price, price_text, area,
@@ -812,12 +574,16 @@ admin.post('/import', async (c) => {
   const totalRows = lines.length - 1;
   const errorLog = errors.length > 0 ? errors.slice(0, 20).join('\n') : null;
 
-  await env.MAL_DB.prepare(`
-    UPDATE csv_imports
-    SET status='completed', total_rows=?, imported_rows=?, skipped_rows=?, error_rows=?,
-        error_log=?, completed_at=datetime('now')
-    WHERE id=?
-  `).bind(totalRows, importedRows, skippedRows, errorRows, errorLog, importId).run();
+  try {
+    await env.MAL_DB.prepare(`
+      UPDATE csv_imports
+      SET status='completed', total_rows=?, imported_rows=?, skipped_rows=?, error_rows=?,
+          error_log=?, completed_at=datetime('now')
+      WHERE id=?
+    `).bind(totalRows, importedRows, skippedRows, errorRows, errorLog, importId).run();
+  } catch (e) {
+    console.warn('[admin/import] csv_imports update skipped (DB1 full?):', e instanceof Error ? e.message : e);
+  }
 
   // session 連携: categories_json に当該カテゴリの結果をマージ + total_imported を加算
   if (sessionId) {
@@ -927,9 +693,21 @@ admin.get('/images/queue-status', async (c) => {
 
 // ─── POST /api/admin/scrape ──────────────────────────────────────────────────
 // Manually trigger the scheduled scrape (same logic as cron, but on-demand).
+// Optional JSON body: { prefectures?: string[], sites?: string[] }
+// Example: { "prefectures": ["13", "27"], "sites": ["homes", "chintai"] }
 admin.post('/scrape', async (c) => {
+  let body: { prefectures?: string[]; sites?: string[]; prefecture?: string; site?: string } = {};
+  try { body = await c.req.json(); } catch { /* no body is fine */ }
+
+  // Support both array form and single-value form for convenience
+  const prefectures = body.prefectures ?? (body.prefecture ? [body.prefecture] : undefined);
+  const siteIds = body.sites ?? (body.site ? [body.site] : undefined);
+
   try {
-    const result = await runScheduledScrape(c.env);
+    const result = await runScheduledScrape(c.env, {
+      prefectures: prefectures as import('../types').PrefectureCode[] | undefined,
+      siteIds: siteIds as import('../types').SiteId[] | undefined,
+    });
     return c.json({ ok: true, ...result });
   } catch (e) {
     console.error('[admin/scrape] error:', e);
@@ -992,62 +770,42 @@ admin.post('/backfill-detail-urls', async (c) => {
 });
 
 // ─── GET /api/admin/d1-capacity ──────────────────────────────────────────────
-// Multi-DB Federation 対応: DB1(frozen) + DB2(書き込み中) の両シャードを集計
-// 1シャード = 500MB (D1 free tier)。警告閾値は各シャード 90% (450MB)
+// D1 free tier 上限: 5GB (5120MB) — 2024/3 改定。警告閾値は 80% (4096MB)
 admin.get('/d1-capacity', async (c) => {
-  const DB_CAPACITY_MB = 500; // D1 free tier per-DB 上限
-  const WARN_PERCENT = 90;
-
-  async function getDbInfo(db: D1Database, label: string) {
-    const [total, sold, sites] = await Promise.all([
-      safeFirst<{ n: number }>(db.prepare('SELECT COUNT(*) AS n FROM properties')),
-      safeFirst<{ n: number }>(db.prepare("SELECT COUNT(*) AS n FROM properties WHERE status='sold' OR status='delisted'")),
-      safeAll<{ site_id: string; n: number }>(db.prepare('SELECT site_id, COUNT(*) AS n FROM properties GROUP BY site_id')),
-    ]);
-    let actualMb = 0;
-    try {
-      const pc = await db.prepare('PRAGMA page_count').first<{ page_count: number }>();
-      const ps = await db.prepare('PRAGMA page_size').first<{ page_size: number }>();
-      if (pc && ps) actualMb = Math.round((pc.page_count * ps.page_size) / 1024 / 1024);
-    } catch { /* ignore */ }
-    const n = total?.n ?? 0;
-    const estimatedMb = Math.round((n * 635) / 1024 / 1024);
-    const reportedMb = actualMb || estimatedMb;
-    const usagePercent = Math.round((reportedMb / DB_CAPACITY_MB) * 100);
-    return {
-      label, totalProperties: n, soldOrDelisted: sold?.n ?? 0,
-      sites: sites.results,
-      actualDbMb: actualMb || null, estimatedDbMb: estimatedMb,
-      capacityMb: DB_CAPACITY_MB, usagePercent,
-      status: usagePercent >= 100 ? 'full' : usagePercent >= WARN_PERCENT ? 'warning' : 'ok',
-    };
+  const total = await safeFirst<{ n: number }>(
+    c.env.MAL_DB.prepare('SELECT COUNT(*) AS n FROM properties')
+  );
+  const sites = await safeAll<{ site_id: string; n: number }>(
+    c.env.MAL_DB.prepare('SELECT site_id, COUNT(*) AS n FROM properties GROUP BY site_id')
+  );
+  const sold = await safeFirst<{ n: number }>(
+    c.env.MAL_DB.prepare("SELECT COUNT(*) AS n FROM properties WHERE status='sold' OR status='delisted'")
+  );
+  // SQLite PRAGMA で実サイズ取得 (page_count × page_size)
+  let actualMb = 0;
+  try {
+    const pc = await c.env.MAL_DB.prepare('PRAGMA page_count').first<{ page_count: number }>();
+    const ps = await c.env.MAL_DB.prepare('PRAGMA page_size').first<{ page_size: number }>();
+    if (pc && ps) {
+      actualMb = Math.round((pc.page_count * ps.page_size) / 1024 / 1024);
+    }
+  } catch (e) {
+    console.warn('[d1-capacity] PRAGMA failed:', e);
   }
-
-  const [db1, db2] = await Promise.all([
-    getDbInfo(c.env.MAL_DB, 'DB1 (frozen)'),
-    c.env.MAL_DB2 ? getDbInfo(c.env.MAL_DB2, 'DB2 (active)') : null,
-  ]);
-
-  const shards = [db1, ...(db2 ? [db2] : [])];
-  const totalProperties = shards.reduce((s, d) => s + d.totalProperties, 0);
-  const totalCapacityMb = shards.length * DB_CAPACITY_MB;
-  // site breakdown 合算
-  const siteMap = new Map<string, number>();
-  for (const d of shards) for (const s of d.sites) siteMap.set(s.site_id, (siteMap.get(s.site_id) ?? 0) + s.n);
-  const sites = Array.from(siteMap.entries()).map(([site_id, n]) => ({ site_id, n })).sort((a, b) => b.n - a.n);
-
+  const totalN = total?.n ?? 0;
+  const estimatedMb = Math.round((totalN * 635) / 1024 / 1024);
+  const reportedMb = actualMb || estimatedMb;
+  const CAPACITY_MB = 5120; // D1 free tier 5GB
+  const WARN_MB = 4096;     // 80%
   return c.json({
-    totalProperties,
-    totalCapacityMb,
-    shards,
-    sites,
-    // 旧互換フィールド (フロントエンドが参照している場合のため残す)
-    actualDbMb: db1.actualDbMb,
-    estimatedDbMb: db1.estimatedDbMb,
-    usagePercent: db1.usagePercent,
-    warning: shards.some(d => d.status !== 'ok')
-      ? shards.filter(d => d.status !== 'ok').map(d => `${d.label}: ${d.usagePercent}% (${d.actualDbMb ?? d.estimatedDbMb}MB / ${DB_CAPACITY_MB}MB)`).join(', ')
-      : null,
+    totalProperties: totalN,
+    soldOrDelisted: sold?.n ?? 0,
+    sites: sites.results,
+    actualDbMb: actualMb || null,
+    estimatedDbMb: estimatedMb,
+    capacityMb: CAPACITY_MB,
+    usagePercent: Math.round((reportedMb / CAPACITY_MB) * 100),
+    warning: reportedMb > WARN_MB ? `D1 80%超過 (${reportedMb}MB / ${CAPACITY_MB}MB)` : null,
   });
 });
 
@@ -1444,19 +1202,6 @@ admin.post('/master/:id/favorite', async (c) => {
   }
 
   return c.json({ ok: true, id, favorite: body.favorite });
-});
-
-// スクレイプ実行状況 (admin 認証必須)
-admin.get('/scrape/status', async (c) => {
-  const env = c.env;
-  try {
-    const jobs = await env.MAL_DB
-      .prepare('SELECT * FROM scrape_jobs ORDER BY started_at DESC LIMIT 20')
-      .all();
-    return c.json({ jobs: jobs.results ?? [] });
-  } catch {
-    return c.json({ jobs: [] });
-  }
 });
 
 export { admin };
