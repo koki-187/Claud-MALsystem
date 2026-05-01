@@ -404,6 +404,35 @@ export async function getStats(db: D1Database) {
   };
 }
 
+/** DB1+DB2 の stats を並列集計してマージする */
+export async function getStatsFederated(env: Pick<Bindings, 'MAL_DB' | 'MAL_DB2'>) {
+  const dbs = getReadDBs(env);
+  const results = await Promise.all(dbs.map(db => getStats(db).catch(() => null)));
+  const valid = results.filter(Boolean) as Awaited<ReturnType<typeof getStats>>[];
+  if (valid.length === 0) return {
+    totalProperties: 0, activeProperties: 0, soldProperties: 0,
+    bysite: [], byPrefecture: [], recentJobs: [],
+  };
+  if (valid.length === 1) return valid[0];
+  // 合算: totalProperties / active / sold
+  const totalProperties = valid.reduce((s, r) => s + r.totalProperties, 0);
+  const activeProperties = valid.reduce((s, r) => s + r.activeProperties, 0);
+  const soldProperties   = valid.reduce((s, r) => s + r.soldProperties, 0);
+  // bysite: site_id ごとに合算
+  const siteMap = new Map<string, number>();
+  for (const r of valid) for (const s of r.bysite) siteMap.set(s.site_id, (siteMap.get(s.site_id) ?? 0) + s.cnt);
+  const bysite = Array.from(siteMap.entries()).map(([site_id, cnt]) => ({ site_id, cnt }))
+    .sort((a, b) => b.cnt - a.cnt);
+  // byPrefecture: 合算 → 上位10件
+  const prefMap = new Map<string, number>();
+  for (const r of valid) for (const p of r.byPrefecture) prefMap.set(p.prefecture, (prefMap.get(p.prefecture) ?? 0) + p.cnt);
+  const byPrefecture = Array.from(prefMap.entries()).map(([prefecture, cnt]) => ({ prefecture, cnt }))
+    .sort((a, b) => b.cnt - a.cnt).slice(0, 10);
+  // recentJobs: DB1 のジョブログを使用 (DB2 は jobs テーブルなし)
+  const recentJobs = valid[0].recentJobs;
+  return { totalProperties, activeProperties, soldProperties, bysite, byPrefecture, recentJobs };
+}
+
 export async function logSearch(
   db: D1Database,
   params: SearchParams,

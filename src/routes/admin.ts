@@ -81,55 +81,83 @@ async function getR2SizeMb(env: Bindings): Promise<{ mb: number; objectCount: nu
 }
 
 // ─── GET /api/admin/stats ─────────────────────────────────────────────────────
+// Multi-DB Federation 対応: properties 系は DB1+DB2 を並列集計。
+// 管理テーブル (scrape_jobs / csv_imports / download_queue 等) は DB1 のみ。
 admin.get('/stats', async (c) => {
-  const db = c.env.MAL_DB;
+  const db1 = c.env.MAL_DB;
+  const db2 = c.env.MAL_DB2 ?? null;
 
+  // ── DB1 専用クエリ (管理テーブルは DB1 のみ) ──────────────────────────
   const [
-    activeRow, soldRow, delistedRow, totalRow, dupRow,
     totalImgRow, dlImgRow, pendingDlRow, mysokuRow, txnRow,
-    siteRows, prefRows, lastScrapeRow, lastCsvRow,
-    dbSizeMb, r2Size,
+    lastScrapeRow, lastCsvRow,
+    dbSizeMb1, r2Size,
   ] = await Promise.all([
-    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active'`)),
-    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='sold'`)),
-    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='delisted'`)),
-    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties`)),
-    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(DISTINCT fingerprint) as cnt FROM properties WHERE fingerprint IS NOT NULL`)),
-    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM property_images`)),
-    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM property_images WHERE download_status='downloaded'`)),
-    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM download_queue WHERE status='pending'`)),
-    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM property_mysoku`)),
-    safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM transaction_records`)),
-    safeAll<{ site_id: SiteId; cnt: number; sold_cnt: number }>(db.prepare(`SELECT site_id, COUNT(*) as cnt, COUNT(CASE WHEN status='sold' THEN 1 END) as sold_cnt FROM properties GROUP BY site_id`)),
-    safeAll<{ prefecture: PrefectureCode; cnt: number }>(db.prepare(`SELECT prefecture, COUNT(*) as cnt FROM properties WHERE status='active' GROUP BY prefecture ORDER BY cnt DESC LIMIT 20`)),
-    safeFirst<{ val: string | null }>(db.prepare(`SELECT MAX(completed_at) as val FROM scrape_jobs WHERE status='completed'`)),
-    safeFirst<{ val: string | null }>(db.prepare(`SELECT MAX(completed_at) as val FROM csv_imports WHERE status='completed'`)),
-    getD1SizeMb(db),
+    safeFirst<{ cnt: number }>(db1.prepare(`SELECT COUNT(*) as cnt FROM property_images`)),
+    safeFirst<{ cnt: number }>(db1.prepare(`SELECT COUNT(*) as cnt FROM property_images WHERE download_status='downloaded'`)),
+    safeFirst<{ cnt: number }>(db1.prepare(`SELECT COUNT(*) as cnt FROM download_queue WHERE status='pending'`)),
+    safeFirst<{ cnt: number }>(db1.prepare(`SELECT COUNT(*) as cnt FROM property_mysoku`)),
+    safeFirst<{ cnt: number }>(db1.prepare(`SELECT COUNT(*) as cnt FROM transaction_records`)),
+    safeFirst<{ val: string | null }>(db1.prepare(`SELECT MAX(completed_at) as val FROM scrape_jobs WHERE status='completed'`)),
+    safeFirst<{ val: string | null }>(db1.prepare(`SELECT MAX(completed_at) as val FROM csv_imports WHERE status='completed'`)),
+    getD1SizeMb(db1),
     getR2SizeMb(c.env),
   ]);
 
+  // ── properties カウント: DB1+DB2 並列 ──────────────────────────────────
+  async function getPropCounts(db: D1Database) {
+    const [active, sold, delisted, total, dup, sites, prefs] = await Promise.all([
+      safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='active'`)),
+      safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='sold'`)),
+      safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties WHERE status='delisted'`)),
+      safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(*) as cnt FROM properties`)),
+      safeFirst<{ cnt: number }>(db.prepare(`SELECT COUNT(DISTINCT fingerprint) as cnt FROM properties WHERE fingerprint IS NOT NULL`)),
+      safeAll<{ site_id: SiteId; cnt: number; sold_cnt: number }>(db.prepare(`SELECT site_id, COUNT(*) as cnt, COUNT(CASE WHEN status='sold' THEN 1 END) as sold_cnt FROM properties GROUP BY site_id`)),
+      safeAll<{ prefecture: PrefectureCode; cnt: number }>(db.prepare(`SELECT prefecture, COUNT(*) as cnt FROM properties WHERE status='active' GROUP BY prefecture ORDER BY cnt DESC LIMIT 20`)),
+    ]);
+    return { active: active?.cnt ?? 0, sold: sold?.cnt ?? 0, delisted: delisted?.cnt ?? 0,
+             total: total?.cnt ?? 0, dup: dup?.cnt ?? 0,
+             sites: sites.results ?? [], prefs: prefs.results ?? [] };
+  }
+
+  const [c1, c2] = await Promise.all([
+    getPropCounts(db1),
+    db2 ? getPropCounts(db2).catch(() => null) : Promise.resolve(null),
+  ]);
+
+  // 合算
+  const activeProperties   = c1.active   + (c2?.active   ?? 0);
+  const soldProperties     = c1.sold     + (c2?.sold     ?? 0);
+  const delistedProperties = c1.delisted + (c2?.delisted ?? 0);
+  const totalProperties    = c1.total    + (c2?.total    ?? 0);
+  const duplicateGroups    = c1.dup      + (c2?.dup      ?? 0);
+
+  // site breakdown 合算
+  const siteMap = new Map<SiteId, { count: number; sold: number }>();
+  for (const r of [...c1.sites, ...(c2?.sites ?? [])]) {
+    const prev = siteMap.get(r.site_id as SiteId) ?? { count: 0, sold: 0 };
+    siteMap.set(r.site_id as SiteId, { count: prev.count + r.cnt, sold: prev.sold + r.sold_cnt });
+  }
+  // prefecture breakdown 合算
+  const prefMap = new Map<PrefectureCode, number>();
+  for (const r of [...c1.prefs, ...(c2?.prefs ?? [])]) {
+    prefMap.set(r.prefecture, (prefMap.get(r.prefecture) ?? 0) + r.cnt);
+  }
+  const dbSizeMb2 = db2 ? await getD1SizeMb(db2).catch(() => 0) : 0;
+
   const stats: AdminStats = {
-    activeProperties:    activeRow?.cnt ?? 0,
-    soldProperties:      soldRow?.cnt ?? 0,
-    delistedProperties:  delistedRow?.cnt ?? 0,
-    totalProperties:     totalRow?.cnt ?? 0,
-    duplicateGroups:     dupRow?.cnt ?? 0,
-    totalImages:         totalImgRow?.cnt ?? 0,
-    downloadedImages:    dlImgRow?.cnt ?? 0,
-    pendingDownloads:    pendingDlRow?.cnt ?? 0,
-    totalMysoku:         mysokuRow?.cnt ?? 0,
-    totalTransactions:   txnRow?.cnt ?? 0,
+    activeProperties, soldProperties, delistedProperties, totalProperties, duplicateGroups,
+    totalImages:      totalImgRow?.cnt ?? 0,
+    downloadedImages: dlImgRow?.cnt ?? 0,
+    pendingDownloads: pendingDlRow?.cnt ?? 0,
+    totalMysoku:      mysokuRow?.cnt ?? 0,
+    totalTransactions: txnRow?.cnt ?? 0,
     r2StorageEstimatedMb: r2Size.mb,
-    dbSizeEstimatedMb:    dbSizeMb,
-    siteBreakdown: (siteRows.results ?? []).map(r => ({
-      siteId: r.site_id,
-      count:  r.cnt,
-      sold:   r.sold_cnt,
-    })),
-    prefectureBreakdown: (prefRows.results ?? []).map(r => ({
-      prefecture: r.prefecture,
-      count:      r.cnt,
-    })),
+    dbSizeEstimatedMb: dbSizeMb1 + dbSizeMb2,
+    siteBreakdown: Array.from(siteMap.entries()).map(([siteId, v]) => ({ siteId, count: v.count, sold: v.sold })),
+    prefectureBreakdown: Array.from(prefMap.entries())
+      .map(([prefecture, count]) => ({ prefecture, count }))
+      .sort((a, b) => b.count - a.count).slice(0, 20),
     lastScrapeAt:    lastScrapeRow?.val ?? null,
     lastCsvImportAt: lastCsvRow?.val ?? null,
   };
@@ -964,42 +992,62 @@ admin.post('/backfill-detail-urls', async (c) => {
 });
 
 // ─── GET /api/admin/d1-capacity ──────────────────────────────────────────────
-// D1 free tier 上限: 5GB (5120MB) — 2024/3 改定。警告閾値は 80% (4096MB)
+// Multi-DB Federation 対応: DB1(frozen) + DB2(書き込み中) の両シャードを集計
+// 1シャード = 500MB (D1 free tier)。警告閾値は各シャード 90% (450MB)
 admin.get('/d1-capacity', async (c) => {
-  const total = await safeFirst<{ n: number }>(
-    c.env.MAL_DB.prepare('SELECT COUNT(*) AS n FROM properties')
-  );
-  const sites = await safeAll<{ site_id: string; n: number }>(
-    c.env.MAL_DB.prepare('SELECT site_id, COUNT(*) AS n FROM properties GROUP BY site_id')
-  );
-  const sold = await safeFirst<{ n: number }>(
-    c.env.MAL_DB.prepare("SELECT COUNT(*) AS n FROM properties WHERE status='sold' OR status='delisted'")
-  );
-  // SQLite PRAGMA で実サイズ取得 (page_count × page_size)
-  let actualMb = 0;
-  try {
-    const pc = await c.env.MAL_DB.prepare('PRAGMA page_count').first<{ page_count: number }>();
-    const ps = await c.env.MAL_DB.prepare('PRAGMA page_size').first<{ page_size: number }>();
-    if (pc && ps) {
-      actualMb = Math.round((pc.page_count * ps.page_size) / 1024 / 1024);
-    }
-  } catch (e) {
-    console.warn('[d1-capacity] PRAGMA failed:', e);
+  const DB_CAPACITY_MB = 500; // D1 free tier per-DB 上限
+  const WARN_PERCENT = 90;
+
+  async function getDbInfo(db: D1Database, label: string) {
+    const [total, sold, sites] = await Promise.all([
+      safeFirst<{ n: number }>(db.prepare('SELECT COUNT(*) AS n FROM properties')),
+      safeFirst<{ n: number }>(db.prepare("SELECT COUNT(*) AS n FROM properties WHERE status='sold' OR status='delisted'")),
+      safeAll<{ site_id: string; n: number }>(db.prepare('SELECT site_id, COUNT(*) AS n FROM properties GROUP BY site_id')),
+    ]);
+    let actualMb = 0;
+    try {
+      const pc = await db.prepare('PRAGMA page_count').first<{ page_count: number }>();
+      const ps = await db.prepare('PRAGMA page_size').first<{ page_size: number }>();
+      if (pc && ps) actualMb = Math.round((pc.page_count * ps.page_size) / 1024 / 1024);
+    } catch { /* ignore */ }
+    const n = total?.n ?? 0;
+    const estimatedMb = Math.round((n * 635) / 1024 / 1024);
+    const reportedMb = actualMb || estimatedMb;
+    const usagePercent = Math.round((reportedMb / DB_CAPACITY_MB) * 100);
+    return {
+      label, totalProperties: n, soldOrDelisted: sold?.n ?? 0,
+      sites: sites.results,
+      actualDbMb: actualMb || null, estimatedDbMb: estimatedMb,
+      capacityMb: DB_CAPACITY_MB, usagePercent,
+      status: usagePercent >= 100 ? 'full' : usagePercent >= WARN_PERCENT ? 'warning' : 'ok',
+    };
   }
-  const totalN = total?.n ?? 0;
-  const estimatedMb = Math.round((totalN * 635) / 1024 / 1024);
-  const reportedMb = actualMb || estimatedMb;
-  const CAPACITY_MB = 5120; // D1 free tier 5GB
-  const WARN_MB = 4096;     // 80%
+
+  const [db1, db2] = await Promise.all([
+    getDbInfo(c.env.MAL_DB, 'DB1 (frozen)'),
+    c.env.MAL_DB2 ? getDbInfo(c.env.MAL_DB2, 'DB2 (active)') : null,
+  ]);
+
+  const shards = [db1, ...(db2 ? [db2] : [])];
+  const totalProperties = shards.reduce((s, d) => s + d.totalProperties, 0);
+  const totalCapacityMb = shards.length * DB_CAPACITY_MB;
+  // site breakdown 合算
+  const siteMap = new Map<string, number>();
+  for (const d of shards) for (const s of d.sites) siteMap.set(s.site_id, (siteMap.get(s.site_id) ?? 0) + s.n);
+  const sites = Array.from(siteMap.entries()).map(([site_id, n]) => ({ site_id, n })).sort((a, b) => b.n - a.n);
+
   return c.json({
-    totalProperties: totalN,
-    soldOrDelisted: sold?.n ?? 0,
-    sites: sites.results,
-    actualDbMb: actualMb || null,
-    estimatedDbMb: estimatedMb,
-    capacityMb: CAPACITY_MB,
-    usagePercent: Math.round((reportedMb / CAPACITY_MB) * 100),
-    warning: reportedMb > WARN_MB ? `D1 80%超過 (${reportedMb}MB / ${CAPACITY_MB}MB)` : null,
+    totalProperties,
+    totalCapacityMb,
+    shards,
+    sites,
+    // 旧互換フィールド (フロントエンドが参照している場合のため残す)
+    actualDbMb: db1.actualDbMb,
+    estimatedDbMb: db1.estimatedDbMb,
+    usagePercent: db1.usagePercent,
+    warning: shards.some(d => d.status !== 'ok')
+      ? shards.filter(d => d.status !== 'ok').map(d => `${d.label}: ${d.usagePercent}% (${d.actualDbMb ?? d.estimatedDbMb}MB / ${DB_CAPACITY_MB}MB)`).join(', ')
+      : null,
   });
 });
 

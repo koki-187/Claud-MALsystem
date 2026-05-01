@@ -4,7 +4,7 @@ import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 import { timing } from 'hono/timing';
 import type { Bindings, AppVariables } from './types';
-import { searchProperties, getPropertyById, getStats, logSearch, searchMasters, searchPropertiesFederated, getPropertyByIdFederated, getReadDBs } from './db/queries';
+import { searchProperties, getPropertyById, getStats, getStatsFederated, logSearch, searchMasters, searchPropertiesFederated, getPropertyByIdFederated, getReadDBs } from './db/queries';
 import { aggregateSearch, runScheduledScrape } from './scrapers/aggregator';
 import { PREFECTURES, SITES } from './types';
 import { admin as adminRoutes } from './routes/admin';
@@ -179,7 +179,7 @@ app.get('/api/properties/:id', async (c) => {
 
 app.get('/api/stats', async (c) => {
   try {
-    const stats = await getStats(c.env.MAL_DB);
+    const stats = await getStatsFederated(c.env);
     return c.json(stats);
   } catch {
     return c.json({ totalProperties: 0, activeProperties: 0, soldProperties: 0, bysite: [], byPrefecture: [], recentJobs: [] });
