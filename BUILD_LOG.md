@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-05-05 03:10 (Desktop) — TERASSインポート完了・DB2満杯・DB3作成待ち
+
+- **環境**: Desktop
+- **ブランチ**: master (commit 730a747)
+- **変更内容**:
+
+### TERASSインポート最終結果
+- **リトライスクリプト** `scripts/terass_retry_pref.mjs` 作成 (12秒ディレイ + 503リトライ)
+- TERASS_県名_*.csv 277ファイル全処理完了 / **300,683件新規取込 / 失敗0件**
+- DB合計: 642,570件 → **1,037,940件** (+395,370件)
+- Active: 858,351件 / Sold: 177,510件
+
+### DB状態 (緊急)
+- DB1 (mal-search-db): 500MB 凍結 (529,457件)
+- DB2 (mal-search-db-2): **476MB / 残23MB** ⚠️ 満杯間近
+- **D1上限10個に達しDB3作成不可** → ユーザー確認待ち
+
+### 不要DB候補 (削除して DB3 作成スロット確保)
+- `test-permission-check-invalid` (12KB, 2025-09-28) ← 明らかにテスト用
+- `takken-boost-production` (147KB, 2025-09-28) ← 旧バージョン
+- `takken-boost-v5` (528KB, 2025-09-28) ← 旧バージョン
+- `takken-boost-db-v9` (528KB, 2025-10-01) ← 旧バージョン
+
+**次のタスク**: ユーザー承認でDB削除 → DB3作成 → wrangler.toml/queries.ts更新 → デプロイ
+
+---
+
 ## 2026-05-04 23:10 (Desktop) — デプロイ + TERASSインポート実行中
 
 - **環境**: Desktop
