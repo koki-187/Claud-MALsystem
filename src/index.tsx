@@ -1757,7 +1757,7 @@ details[open] .accordion-arrow { transform: rotate(180deg); }
       <span class="logo-icon">🌎</span>
       <div>
         <div class="logo-text">MAL</div>
-        <div class="logo-sub">不動産一括検索 v6.2</div>
+        <div class="logo-sub">不動産一括検索 v6.3</div>
       </div>
     </div>
     <div class="header-spacer"></div>
@@ -1767,6 +1767,10 @@ details[open] .accordion-arrow { transform: rotate(180deg); }
     </div>
     <button class="header-btn" onclick="showWelcomeManually()" title="使い方ガイドを表示" aria-label="使い方ガイド">
       <i class="fas fa-question"></i>
+    </button>
+    <button class="header-btn fav-header-btn" onclick="showFavoritesPanel()" title="お気に入り一覧" aria-label="お気に入り" id="favHeaderBtn">
+      <i class="fas fa-heart"></i>
+      <span class="fav-count-badge" id="favCountBadge"></span>
     </button>
     <button class="header-btn" onclick="toggleTheme()" title="テーマ切替 (ダーク/ライト)" id="themeBtn" aria-label="テーマ切替">
       <i class="fas fa-moon" id="themeIcon"></i>
@@ -2371,6 +2375,9 @@ function toggleTheme() {
   // Stats bar
   loadHeaderStats();
 
+  // Favorites badge
+  updateFavBadge();
+
   // Welcome ガイド (初回訪問時のみ)
   showWelcomeIfFirstVisit();
 
@@ -2928,84 +2935,181 @@ function renderModal(p) {
   var priceStr = p.price ? p.price.toLocaleString() + '万円' : (p.priceText || '価格要相談');
   var prefName = PREF_DATA[p.prefecture] || '';
 
-  // 画像ギャラリー（最大5枚）— R2 keys優先、fallback to images/thumbnailUrl
-  var gallery = '';
+  // ── 画像スライダー（R2 keys優先 → images配列 → thumbnailUrl → プレースホルダー）──
   var galSrcs = [];
   if (p.imageKeys && p.imageKeys.length > 0) {
-    galSrcs = p.imageKeys.slice(0, 5).map(function(k) { return '/api/images/' + encodeURIComponent(k); });
+    galSrcs = p.imageKeys.slice(0, 10).map(function(k) { return '/api/images/' + encodeURIComponent(k); });
   } else if (p.images && p.images.length > 0) {
-    galSrcs = p.images.slice(0, 5);
+    galSrcs = p.images.slice(0, 10);
   } else if (p.thumbnailUrl) {
     galSrcs = [p.thumbnailUrl];
   }
-  if (galSrcs.length > 0) {
-    gallery = '<div class="img-gallery">'
-      + galSrcs.map(function(src) {
-          return '<img src="' + escAttr(src) + '" class="gallery-img" alt="物件画像" loading="lazy" onclick="openImg(\'' + escAttr(src) + '\')" onerror="this.style.display=\'none\'">';
-        }).join('') + '</div>';
+
+  var sliderHtml;
+  var sliderId = 'slider_' + (p.id || 'x').replace(/[^a-z0-9]/gi,'_');
+  if (galSrcs.length === 0) {
+    sliderHtml = '<div class="img-slider-wrap"><div class="img-slider-placeholder">' + (site.logo || '🏠') + '</div></div>';
+  } else {
+    var slides = galSrcs.map(function(src, i) {
+      return '<div class="img-slider-slide">'
+        + '<img src="' + escAttr(src) + '" alt="物件画像 ' + (i+1) + '" loading="' + (i===0?'eager':'lazy') + '" onclick="openImg(\'' + escAttr(src) + '\')" style="cursor:zoom-in" onerror="this.parentElement.style.display=\'none\'">'
+        + '</div>';
+    }).join('');
+    var dots = galSrcs.length > 1
+      ? '<div class="img-slider-dots" id="' + sliderId + '_dots">'
+        + galSrcs.map(function(_,i){ return '<button class="img-slider-dot' + (i===0?' active':'') + '" onclick="sliderGo(\'' + sliderId + '\',' + i + ')" aria-label="画像 ' + (i+1) + '"></button>'; }).join('')
+        + '</div>'
+      : '';
+    var navButtons = galSrcs.length > 1
+      ? '<button class="img-slider-nav img-slider-prev" onclick="sliderGo(\'' + sliderId + '\',-1,true)" aria-label="前の画像"><i class="fas fa-chevron-left"></i></button>'
+        + '<button class="img-slider-nav img-slider-next" onclick="sliderGo(\'' + sliderId + '\',1,true)" aria-label="次の画像"><i class="fas fa-chevron-right"></i></button>'
+      : '';
+    var countBadge = galSrcs.length > 1
+      ? '<span class="img-slider-count" id="' + sliderId + '_count">1 / ' + galSrcs.length + '</span>'
+      : '';
+    sliderHtml = '<div class="img-slider-wrap">'
+      + '<div class="img-slider-track" id="' + sliderId + '" onscroll="sliderOnScroll(\'' + sliderId + '\',' + galSrcs.length + ')">'
+      + slides
+      + '</div>'
+      + navButtons + dots + countBadge
+      + '</div>';
   }
 
-  // 間取り図
+  // ── 主要スペックバッジ ──
+  var badges = [];
+  if (p.rooms) badges.push('<span class="spec-badge highlight"><i class="fas fa-door-open"></i>' + escHtml(p.rooms) + '</span>');
+  if (p.area) badges.push('<span class="spec-badge"><i class="fas fa-ruler-combined"></i>' + p.area + 'm²</span>');
+  if (p.age !== null && p.age !== undefined) badges.push('<span class="spec-badge"><i class="fas fa-calendar-alt"></i>築' + p.age + '年</span>');
+  if (p.stationMinutes) badges.push('<span class="spec-badge"><i class="fas fa-train"></i>徒歩' + p.stationMinutes + '分</span>');
+  if (p.floor) badges.push('<span class="spec-badge"><i class="fas fa-layer-group"></i>' + p.floor + '階</span>');
+  if (p.yieldRate) badges.push('<span class="spec-badge" style="background:rgba(220,38,38,.08);border-color:rgba(220,38,38,.3);color:#dc2626"><i class="fas fa-chart-line" style="color:#dc2626"></i>' + p.yieldRate.toFixed(1) + '%</span>');
+  var specBadgesHtml = badges.length > 0 ? '<div class="spec-badges">' + badges.join('') + '</div>' : '';
+
+  // ── 価格ブロック ──
+  var priceHistoryHtml = buildPriceHistoryChart(p.priceHistory);
+  var priceBlockHtml = '<div class="modal-price-block" style="margin-bottom:8px">'
+    + '<span class="modal-price-main" style="color:' + (isSold ? 'var(--c-text3)' : color) + '">' + (isSold ? '<span style="text-decoration:line-through">' : '') + escHtml(priceStr) + (isSold ? '</span>' : '') + '</span>'
+    + (p.managementFee || p.repairFund ? '<span class="modal-price-sub">管理費 ' + (p.managementFee ? p.managementFee.toLocaleString() + '円' : '-') + ' + 修繕 ' + (p.repairFund ? p.repairFund.toLocaleString() + '円' : '-') + '/月</span>' : '')
+    + '</div>'
+    + priceHistoryHtml;
+
+  // ── 月々支払いシミュレーター（価格がある場合のみ表示）──
+  var simHtml = '';
+  if (p.price && p.price > 0 && !isSold) {
+    var simId = 'sim_' + (p.id || 'x').replace(/[^a-z0-9]/gi,'_');
+    var defaultDown = 0;
+    var defaultRate = 0.5;
+    var defaultYears = 35;
+    var mgmtFee = p.managementFee || 0;
+    var repairFee = p.repairFund || 0;
+    simHtml = '<div class="sim-section">'
+      + '<div class="sim-title" onclick="toggleSim(\'' + simId + '\')">'
+      + '<i class="fas fa-calculator"></i>月々支払いシミュレーター'
+      + '<i class="fas fa-chevron-down sim-toggle-icon" id="' + simId + '_icon"></i>'
+      + '</div>'
+      + '<div class="sim-body" id="' + simId + '_body">'
+      + '<div class="sim-grid">'
+      + '<div class="sim-field"><label class="sim-label">頭金（万円）</label><input class="sim-input" id="' + simId + '_down" type="number" min="0" max="' + p.price + '" value="' + defaultDown + '" oninput="calcSim(\'' + simId + '\',' + p.price + ',' + mgmtFee + ',' + repairFee + ')"></div>'
+      + '<div class="sim-field"><label class="sim-label">金利（%/年）</label><input class="sim-input" id="' + simId + '_rate" type="number" min="0" max="20" step="0.01" value="' + defaultRate + '" oninput="calcSim(\'' + simId + '\',' + p.price + ',' + mgmtFee + ',' + repairFee + ')"></div>'
+      + '<div class="sim-field"><label class="sim-label">返済年数</label><input class="sim-input" id="' + simId + '_years" type="number" min="1" max="50" value="' + defaultYears + '" oninput="calcSim(\'' + simId + '\',' + p.price + ',' + mgmtFee + ',' + repairFee + ')"></div>'
+      + '<div class="sim-field"><label class="sim-label">管理費（円/月）</label><input class="sim-input" id="' + simId + '_mgmt" type="number" min="0" value="' + mgmtFee + '" oninput="calcSim(\'' + simId + '\',' + p.price + ',' + mgmtFee + ',' + repairFee + ')"></div>'
+      + '</div>'
+      + '<div class="sim-result" id="' + simId + '_result"><div class="sim-result-left"><div class="sim-result-label">月々の支払い目安</div><div class="sim-result-value" id="' + simId + '_monthly">--</div><div class="sim-result-detail" id="' + simId + '_detail"></div></div></div>'
+      + '<div class="sim-note">※元利均等返済。概算です。実際は金融機関にご確認ください。</div>'
+      + '</div>'
+      + '</div>';
+  }
+
+  // ── 間取り図 ──
   var floorPlanHtml = p.floorPlanUrl
-    ? '<div style="margin-bottom:12px"><div style="font-size:11px;font-weight:700;color:var(--c-text3);letter-spacing:.04em;margin-bottom:6px">間取り図</div><img src="' + escAttr(p.floorPlanUrl) + '" class="floor-plan" alt="間取り図" loading="lazy" onerror="this.style.display=\'none\'"></div>'
+    ? '<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;color:var(--c-text3);margin-bottom:6px">間取り図</div><img src="' + escAttr(p.floorPlanUrl) + '" class="floor-plan" alt="間取り図" loading="lazy" onerror="this.style.display=\'none\'"></div>'
     : '';
 
-  // 費用・仕様情報
-  var feeItems = [];
-  if (p.managementFee) feeItems.push('管理費: ' + p.managementFee.toLocaleString() + '円/月');
-  if (p.repairFund) feeItems.push('修繕積立: ' + p.repairFund.toLocaleString() + '円/月');
-  if (p.direction) feeItems.push('向き: ' + p.direction);
-  if (p.structure) feeItems.push('構造: ' + p.structure);
-  var feesHtml = feeItems.length > 0
-    ? '<div style="margin-bottom:12px;font-size:12px;color:var(--c-text3)">' + feeItems.map(function(f){ return escHtml(f); }).join(' / ') + '</div>'
-    : '';
+  // ── 詳細情報テーブル ──
+  var tableRows = [
+    ['所在地', (prefName ? prefName + ' ' : '') + (p.city || '') + (p.address ? ' ' + p.address : '')],
+    ['最寄駅', p.station ? escHtml(p.station) + (p.stationMinutes ? ' 徒歩' + p.stationMinutes + '分' : '') : null],
+    ['専有面積', p.area ? p.area + 'm²' + (p.buildingArea && p.buildingArea !== p.area ? '（建物 ' + p.buildingArea + 'm²）' : '') : null],
+    ['間取り', p.rooms || null],
+    ['築年数', p.age !== null && p.age !== undefined ? '築' + p.age + '年' : null],
+    ['階数', p.floor ? p.floor + '階' : null],
+    ['構造', p.structure || null],
+    ['向き', p.direction || null],
+    ['管理費', p.managementFee ? p.managementFee.toLocaleString() + '円/月' : null],
+    ['修繕積立金', p.repairFund ? p.repairFund.toLocaleString() + '円/月' : null],
+    ['表面利回り', p.yieldRate ? p.yieldRate.toFixed(2) + '%' : null],
+    ['ステータス', isSold ? '売却済' + (p.soldAt ? '（' + p.soldAt.slice(0,10) + '）' : '') : '販売中'],
+    ['物件ID', p.sitePropertyId || p.id || null],
+  ].filter(function(r){ return r[1]; });
 
+  var detailTableHtml = '<table class="detail-table">'
+    + tableRows.map(function(r){ return '<tr><th>' + escHtml(r[0]) + '</th><td>' + (typeof r[1] === 'string' && r[1].startsWith('<') ? r[1] : escHtml(r[1])) + '</td></tr>'; }).join('')
+    + '</table>';
+
+  // ── 設備タグ ──
   var features = '';
   if (p.features && p.features.length > 0) {
-    features = '<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;color:var(--c-text3);letter-spacing:.04em;text-transform:uppercase;margin-bottom:8px">設備・特徴</div>'
+    features = '<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;color:var(--c-text3);margin-bottom:8px">設備・特徴</div>'
       + '<div class="features-wrap">' + p.features.map(function(f) { return '<span class="feature-tag">' + escHtml(f) + '</span>'; }).join('') + '</div></div>';
   }
 
-  var details = [
-    { label: '所在地', value: prefName + ' ' + (p.city || ''), sub: p.address },
-    { label: 'アクセス', value: p.station || '-', sub: p.stationMinutes ? '徒歩' + p.stationMinutes + '分' : null },
-    p.area ? { label: '面積', value: p.area + 'm²', sub: p.buildingArea && p.buildingArea !== p.area ? '建物: ' + p.buildingArea + 'm²' : null } : null,
-    { label: '間取り', value: p.rooms || '-', sub: (p.age !== null && p.age !== undefined ? '築' + p.age + '年' : '') + (p.floor ? ' ' + p.floor + '階' : '') || null },
-    p.yieldRate ? { label: '表面利回り', value: p.yieldRate.toFixed(2) + '%', sub: '投資物件' } : null,
-    { label: 'ステータス', value: isSold ? '売却済' : '販売中', sub: p.soldAt ? p.soldAt.slice(0,10) + ' 売却' : null },
-  ].filter(Boolean);
+  // ── 物件説明 ──
+  var desc = p.description ? '<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;color:var(--c-text3);margin-bottom:6px">物件説明</div><p style="font-size:13px;color:var(--c-text2);line-height:1.7">' + escHtml(p.description) + '</p></div>' : '';
 
-  var detailGrid = '<div class="detail-grid">' + details.map(function(d) {
-    return '<div class="detail-item"><div class="detail-item-label">' + d.label + '</div><div class="detail-item-value">' + escHtml(d.value) + '</div>' + (d.sub ? '<div class="detail-item-sub">' + escHtml(d.sub) + '</div>' : '') + '</div>';
-  }).join('') + '</div>';
+  // ── Google Maps リンク ──
+  var addressForMap = [prefName, p.city, p.address].filter(Boolean).join(' ');
+  var mapsHref = addressForMap
+    ? 'https://www.google.com/maps/search/' + encodeURIComponent(addressForMap)
+    : (p.latitude && p.longitude ? 'https://www.google.com/maps?q=' + p.latitude + ',' + p.longitude : null);
 
-  var desc = p.description ? '<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;color:var(--c-text3);letter-spacing:.04em;margin-bottom:6px">物件説明</div><p style="font-size:13px;color:var(--c-text2);line-height:1.7">' + escHtml(p.description) + '</p></div>' : '';
-
-  var priceHistoryHtml = buildPriceHistoryChart(p.priceHistory);
   var favActive = isFavorite(p.id);
 
+  // ── CTAボタン群 ──
+  var ctaHtml = '<div class="modal-actions">'
+    + (p.detailUrl ? '<a href="' + escAttr(p.detailUrl) + '" target="_blank" rel="noopener noreferrer" class="modal-cta" style="flex:1"><i class="fas fa-external-link-alt"></i>' + escHtml(site.name || 'サイト') + 'で詳細を見る</a>' : '')
+    + (mapsHref ? '<a href="' + escAttr(mapsHref) + '" target="_blank" rel="noopener noreferrer" class="btn-map"><i class="fas fa-map-marker-alt"></i>地図</a>' : '')
+    + '<button onclick="window.print()" class="btn-ghost" style="flex-shrink:0;padding:12px 18px;font-size:14px;font-weight:800;border-radius:10px" title="マイソク印刷"><i class="fas fa-print"></i></button>'
+    + '</div>';
+
   document.getElementById('modalContent').innerHTML =
+    // ── ヘッダー行 ──
     '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">'
     + '<span class="prop-badge-site" style="position:static;background:' + color + ';font-size:12px">' + (site.logo||'') + ' ' + escHtml(site.name||p.siteId) + '</span>'
     + '<div style="display:flex;align-items:center;gap:8px">'
     + '<button class="fav-btn' + (favActive ? ' active' : '') + '" data-fav-id="' + escAttr(p.id) + '" onclick="toggleFavorite(\'' + escAttr(p.id) + '\',\'' + escAttr(p.title) + '\')" title="' + (favActive ? 'お気に入り解除' : 'お気に入り追加') + '">❤️</button>'
-    + '<button class="modal-close" onclick="closeModal()">&times;</button>'
+    + '<button class="modal-close" onclick="closeModal()" aria-label="閉じる">&times;</button>'
     + '</div></div>'
-    + (isSold ? '<div class="sold-banner"><i class="fas fa-lock mr-2"></i>この物件は売却済みです</div>' : '')
-    + gallery
-    + '<h2 style="font-size:18px;font-weight:800;margin-bottom:8px">' + escHtml(p.title) + '</h2>'
-    + '<div style="font-size:26px;font-weight:900;margin-bottom:8px;color:' + (isSold ? 'var(--c-text3)' : color) + '">' + (isSold ? '<span style="text-decoration:line-through">' : '') + escHtml(priceStr) + (isSold ? '</span>' : '') + '</div>'
-    + priceHistoryHtml
-    + feesHtml
-    + detailGrid
+    // ── 売却バナー ──
+    + (isSold ? '<div class="sold-banner"><i class="fas fa-lock"></i> この物件は売却済みです</div>' : '')
+    // ── 画像スライダー ──
+    + sliderHtml
+    // ── タイトル ──
+    + '<h2 style="font-size:18px;font-weight:800;margin-bottom:10px;line-height:1.4">' + escHtml(p.title) + '</h2>'
+    // ── スペックバッジ ──
+    + specBadgesHtml
+    // ── 価格 + 履歴 ──
+    + priceBlockHtml
+    // ── シミュレーター ──
+    + simHtml
+    // ── 詳細テーブル ──
+    + '<div style="margin-bottom:16px"><div style="font-size:11px;font-weight:700;color:var(--c-text3);margin-bottom:8px">物件詳細</div>'
+    + detailTableHtml + '</div>'
+    // ── 間取り図 ──
     + floorPlanHtml
+    // ── 設備タグ ──
     + features
+    // ── 説明文 ──
     + desc
+    // ── 掲載媒体 ──
     + buildSourcesSection(p)
-    + '<div style="display:flex;gap:10px;margin-top:4px">'
-    + (p.detailUrl ? '<a href="' + escAttr(p.detailUrl) + '" target="_blank" rel="noopener noreferrer" class="modal-cta" style="flex:1"><i class="fas fa-external-link-alt mr-2"></i>' + escHtml(site.name || 'サイト') + 'で詳細を見る</a>' : '')
-    + '<button onclick="window.print()" class="btn-ghost" style="flex-shrink:0;padding:14px 20px;font-size:15px;font-weight:800;border-radius:10px" title="マイソク (= 物件概要書) を印刷。価格・間取り・写真を1枚にまとめた業者向け資料。"><i class="fas fa-print"></i> マイソク印刷</button>'
-    + '</div>';
+    // ── CTA ──
+    + ctaHtml;
+
+  // シミュレーター初期計算
+  if (p.price && p.price > 0 && !isSold) {
+    var simId2 = 'sim_' + (p.id || 'x').replace(/[^a-z0-9]/gi,'_');
+    calcSim(simId2, p.price, p.managementFee || 0, p.repairFund || 0);
+  }
 }
 
 function openImg(url) {
@@ -3013,6 +3117,121 @@ function openImg(url) {
 }
 
 function closeModal() { document.getElementById('propertyModal').classList.add('hidden'); }
+
+// ── Image Slider ──
+function sliderGo(sliderId, indexOrDelta, isDelta) {
+  var track = document.getElementById(sliderId);
+  if (!track) return;
+  var slides = track.querySelectorAll('.img-slider-slide');
+  if (!slides.length) return;
+  var slideW = track.clientWidth;
+  var cur = Math.round(track.scrollLeft / (slideW || 1));
+  var next;
+  if (isDelta) {
+    next = (cur + indexOrDelta + slides.length) % slides.length;
+  } else {
+    next = Math.max(0, Math.min(indexOrDelta, slides.length - 1));
+  }
+  track.scrollTo({ left: next * slideW, behavior: 'smooth' });
+  updateSliderUI(sliderId, next, slides.length);
+}
+function sliderOnScroll(sliderId, total) {
+  var track = document.getElementById(sliderId);
+  if (!track) return;
+  var slideW = track.clientWidth;
+  var idx = Math.round(track.scrollLeft / (slideW || 1));
+  updateSliderUI(sliderId, idx, total);
+}
+function updateSliderUI(sliderId, idx, total) {
+  // dots
+  var dotsEl = document.getElementById(sliderId + '_dots');
+  if (dotsEl) {
+    dotsEl.querySelectorAll('.img-slider-dot').forEach(function(d, i) {
+      d.classList.toggle('active', i === idx);
+    });
+  }
+  // count badge
+  var countEl = document.getElementById(sliderId + '_count');
+  if (countEl) countEl.textContent = (idx + 1) + ' / ' + total;
+}
+
+// ── Payment Simulator ──
+function toggleSim(simId) {
+  var body = document.getElementById(simId + '_body');
+  var icon = document.getElementById(simId + '_icon');
+  if (!body) return;
+  var open = body.classList.toggle('open');
+  if (icon) icon.style.transform = open ? 'rotate(180deg)' : '';
+}
+function calcSim(simId, priceMan, mgmtFee, repairFee) {
+  var downEl = document.getElementById(simId + '_down');
+  var rateEl = document.getElementById(simId + '_rate');
+  var yearsEl = document.getElementById(simId + '_years');
+  var mgmtEl = document.getElementById(simId + '_mgmt');
+  var monthlyEl = document.getElementById(simId + '_monthly');
+  var detailEl = document.getElementById(simId + '_detail');
+  if (!downEl || !monthlyEl) return;
+  var down = parseFloat(downEl.value) || 0;
+  var annualRate = parseFloat(rateEl.value) || 0;
+  var years = parseInt(yearsEl.value) || 35;
+  var mgmt = parseInt(mgmtEl ? mgmtEl.value : String(mgmtFee)) || 0;
+  var loanMan = priceMan - down;
+  if (loanMan <= 0) {
+    monthlyEl.textContent = '0円';
+    if (detailEl) detailEl.textContent = '頭金で全額支払い';
+    return;
+  }
+  var loanYen = loanMan * 10000;
+  var n = years * 12;
+  var monthly;
+  if (annualRate <= 0) {
+    monthly = Math.ceil(loanYen / n);
+  } else {
+    var r = annualRate / 100 / 12;
+    monthly = Math.ceil(loanYen * r * Math.pow(1 + r, n) / (Math.pow(1 + r, n) - 1));
+  }
+  var repair = parseInt((document.getElementById(simId + '_mgmt') ? '0' : '0')) || repairFee;
+  var total = monthly + mgmt + repair;
+  monthlyEl.textContent = total.toLocaleString() + '円';
+  if (detailEl) {
+    var parts = ['ローン返済 ' + monthly.toLocaleString() + '円'];
+    if (mgmt > 0) parts.push('管理費 ' + mgmt.toLocaleString() + '円');
+    if (repair > 0) parts.push('修繕 ' + repair.toLocaleString() + '円');
+    detailEl.textContent = parts.join(' + ');
+  }
+}
+
+// ── Favorites Panel (simple snackbar-based list) ──
+function showFavoritesPanel() {
+  var keys = Object.keys(_favorites);
+  if (keys.length === 0) {
+    showSnackbar('お気に入りはまだありません', null);
+    return;
+  }
+  // Show in stats modal area for simplicity
+  document.getElementById('statsModal').classList.remove('hidden');
+  document.getElementById('statsContent').innerHTML =
+    '<div style="font-size:14px;font-weight:800;margin-bottom:16px">❤️ お気に入り (' + keys.length + '件)</div>'
+    + keys.map(function(id) {
+        var f = _favorites[id];
+        var saved = f.savedAt ? new Date(f.savedAt).toLocaleDateString('ja-JP') : '';
+        return '<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--c-border)">'
+          + '<div style="flex:1"><div style="font-size:13px;font-weight:600">' + escHtml(f.title || id) + '</div>'
+          + '<div style="font-size:11px;color:var(--c-text4)">' + escHtml(saved) + '</div></div>'
+          + '<button onclick="showDetail(\'' + escAttr(id) + '\');closeStatsModal()" class="btn-ghost" style="font-size:12px;padding:5px 10px">詳細</button>'
+          + '<button onclick="toggleFavorite(\'' + escAttr(id) + '\',\'' + escAttr((f.title||'')) + '\');showFavoritesPanel()" style="color:#e11d48;font-size:18px;background:none;border:none;cursor:pointer" aria-label="削除">&#10005;</button>'
+          + '</div>';
+      }).join('');
+}
+
+// ── Update Favorites Badge ──
+function updateFavBadge() {
+  var count = Object.keys(_favorites).length;
+  var badge = document.getElementById('favCountBadge');
+  if (!badge) return;
+  badge.textContent = count > 9 ? '9+' : String(count);
+  badge.classList.toggle('visible', count > 0);
+}
 
 function buildSourcesSection(p) {
   // p may have .sources (master search) or just siteId (legacy)
@@ -3378,6 +3597,7 @@ function toggleFavorite(id, title) {
     showSnackbar('お気に入りに追加しました ❤️', null);
   }
   saveFavorites();
+  updateFavBadge();
   // ボタン更新
   document.querySelectorAll('[data-fav-id="' + id + '"]').forEach(function(btn) {
     btn.classList.toggle('active', !!_favorites[id]);
