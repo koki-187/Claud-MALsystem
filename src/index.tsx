@@ -506,8 +506,10 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
         console.log(`[daily-cleanup] archiveOldestCold: archived=${archived.archived} deleted=${archived.deleted} keys=${archived.r2Keys.length}`);
 
         // 3. 掲載落ち自動検知: last_seen_at が 30日以上前の active 物件を delisted に変更
+        // DB1 は 500MB 超過で UPDATE 不可のため DB2 (writeDb) のみ対象
         try {
-          const staleResult = await env.MAL_DB.prepare(`
+          const writeDb = getWriteDB(env);
+          const staleResult = await writeDb.prepare(`
             UPDATE properties SET status = 'delisted', updated_at = datetime('now')
             WHERE status = 'active'
               AND last_seen_at IS NOT NULL

@@ -494,7 +494,7 @@ export async function getStats(db: D1Database) {
     db.prepare("SELECT COUNT(*) as total FROM properties WHERE status = 'sold'").first<{ total: number }>(),
     db.prepare("SELECT site_id, COUNT(*) as cnt FROM properties WHERE status = 'active' GROUP BY site_id").all<{ site_id: string; cnt: number }>(),
     db.prepare("SELECT prefecture, COUNT(*) as cnt FROM properties WHERE status = 'active' GROUP BY prefecture ORDER BY cnt DESC LIMIT 10").all<{ prefecture: string; cnt: number }>(),
-    db.prepare('SELECT * FROM scrape_jobs ORDER BY started_at DESC LIMIT 10').all<ScrapeJob>(),
+    db.prepare("SELECT * FROM scrape_jobs WHERE started_at > datetime('now', '-7 days') ORDER BY started_at DESC LIMIT 10").all<ScrapeJob>(),
   ]);
 
   return {
