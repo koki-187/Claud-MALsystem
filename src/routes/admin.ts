@@ -230,7 +230,9 @@ admin.post('/import/session/start', async (c) => {
   }
   const source = body.source || 'terass';
   const sessionId = crypto.randomUUID();
-  await c.env.MAL_DB.prepare(`
+  // DB1 は 500MB 超過で INSERT 不可 → writeDb (DB2) に書き込む
+  const writeDb = getWriteDB(c.env);
+  await writeDb.prepare(`
     INSERT INTO import_sessions (id, source, started_at, status, categories_json, total_imported)
     VALUES (?, ?, datetime('now'), 'in_progress', '{}', 0)
   `).bind(sessionId, source).run();
@@ -246,7 +248,9 @@ admin.post('/import/session/complete', async (c) => {
   const dryRun = c.req.query('dry_run') === '1' || c.req.query('dry_run') === 'true';
   const abortThreshold = Math.max(0, Math.min(1, Number(c.req.query('abort_threshold') ?? '0.30') || 0.30));
 
-  const db = c.env.MAL_DB;
+  // DB1 は 500MB 超過で読み書き不可 → writeDb (DB2) を使用
+  // (DB2 の TERASS 物件のみ delisted 検知対象。DB1 TERASS はフリーズ済みで更新不可)
+  const db = getWriteDB(c.env);
   const sessionRow = await safeFirst<{
     id: string; source: string; status: string;
     categories_json: string | null; total_imported: number;
@@ -456,6 +460,52 @@ admin.post('/import', async (c) => {
     console.warn('[admin/import] csv_imports insert skipped (DB1 full?):', e instanceof Error ? e.message : e);
   }
 
+  // D1 batch 処理: 100行ずつまとめてリクエスト送信 (タイムアウト防止)
+  const BATCH_SIZE = 100;
+
+  // SQL テンプレートを事前定義 (sessionId 有無で last_seen_at の扱いが異なる)
+  const insertSQL_withSession = `
+    INSERT INTO properties (
+      id, site_id, site_property_id, title, property_type, status,
+      prefecture, city, address, price, price_text, area,
+      rooms, age, floor, station, station_minutes,
+      management_fee, repair_fund, direction, structure,
+      yield_rate, thumbnail_url, detail_url, description,
+      fingerprint, latitude, longitude,
+      listed_at, sold_at, last_seen_at, import_session_id,
+      created_at, updated_at, scraped_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?,
+      ?, ?, ?, ?,
+      ?, ?, ?, ?,
+      ?, ?, ?,
+      ?, ?, datetime('now'), ?,
+      datetime('now'), datetime('now'), datetime('now')
+    )
+    ON CONFLICT(site_id, site_property_id) DO UPDATE SET
+      title             = excluded.title,
+      price             = excluded.price,
+      price_text        = excluded.price_text,
+      status            = excluded.status,
+      description       = excluded.description,
+      fingerprint       = excluded.fingerprint,
+      management_fee    = excluded.management_fee,
+      repair_fund       = excluded.repair_fund,
+      direction         = excluded.direction,
+      structure         = excluded.structure,
+      last_seen_at      = excluded.last_seen_at,
+      import_session_id = excluded.import_session_id,
+      updated_at        = datetime('now')
+  `;
+
+  const insertSQL_noSession = insertSQL_withSession.replace(`?, ?, datetime('now'), ?,`, `?, ?, ?, ?,`);
+
+  const insertSQL = sessionId ? insertSQL_withSession : insertSQL_noSession;
+
+  // 行を解析してバインドパラメータを生成
+  const allStatements: D1PreparedStatement[] = [];
   for (let i = 1; i < lines.length; i++) {
     const row = parseRow(lines[i]);
     const siteId = row['site_id'];
@@ -467,107 +517,85 @@ admin.post('/import', async (c) => {
     }
 
     const id = `${siteId}_${sitePropertyId}`;
+    const effectiveLastSeen = sessionId ? null : (row['last_seen_at'] || null);
 
+    const bindParams = sessionId ? [
+      id, siteId, sitePropertyId,
+      row['title'] || '', row['property_type'] || 'other', row['status'] || 'active',
+      row['prefecture'] || '13', row['city'] || '', row['address'] || null,
+      row['price'] ? parseInt(row['price']) : null,
+      row['price_text'] || '',
+      row['area'] ? parseFloat(row['area']) : null,
+      row['rooms'] || null,
+      row['age'] ? parseInt(row['age']) : null,
+      row['floor'] ? parseInt(row['floor']) : null,
+      row['station'] || null,
+      row['station_minutes'] ? parseInt(row['station_minutes']) : null,
+      row['management_fee'] ? parseInt(row['management_fee']) : null,
+      row['repair_fund'] ? parseInt(row['repair_fund']) : null,
+      row['direction'] || null,
+      row['structure'] || null,
+      row['yield_rate'] ? parseFloat(row['yield_rate']) : null,
+      row['thumbnail_url'] || null,
+      row['detail_url'] || '',
+      row['description'] || null,
+      row['fingerprint'] || null,
+      row['latitude'] ? parseFloat(row['latitude']) : null,
+      row['longitude'] ? parseFloat(row['longitude']) : null,
+      row['listed_at'] || null,
+      row['sold_at'] || null,
+      // last_seen_at は SQL 側で datetime('now') 固定 → bind から除外
+      sessionId,
+    ] : [
+      id, siteId, sitePropertyId,
+      row['title'] || '', row['property_type'] || 'other', row['status'] || 'active',
+      row['prefecture'] || '13', row['city'] || '', row['address'] || null,
+      row['price'] ? parseInt(row['price']) : null,
+      row['price_text'] || '',
+      row['area'] ? parseFloat(row['area']) : null,
+      row['rooms'] || null,
+      row['age'] ? parseInt(row['age']) : null,
+      row['floor'] ? parseInt(row['floor']) : null,
+      row['station'] || null,
+      row['station_minutes'] ? parseInt(row['station_minutes']) : null,
+      row['management_fee'] ? parseInt(row['management_fee']) : null,
+      row['repair_fund'] ? parseInt(row['repair_fund']) : null,
+      row['direction'] || null,
+      row['structure'] || null,
+      row['yield_rate'] ? parseFloat(row['yield_rate']) : null,
+      row['thumbnail_url'] || null,
+      row['detail_url'] || '',
+      row['description'] || null,
+      row['fingerprint'] || null,
+      row['latitude'] ? parseFloat(row['latitude']) : null,
+      row['longitude'] ? parseFloat(row['longitude']) : null,
+      row['listed_at'] || null,
+      row['sold_at'] || null,
+      effectiveLastSeen,
+      null, // import_session_id
+    ];
+
+    allStatements.push(writeDbImport.prepare(insertSQL).bind(...bindParams));
+  }
+
+  // BATCH_SIZE ずつ D1 batch API で実行
+  for (let b = 0; b < allStatements.length; b += BATCH_SIZE) {
+    const batchSlice = allStatements.slice(b, b + BATCH_SIZE);
     try {
-      // session 指定時は last_seen_at と import_session_id を datetime('now') / sessionId で上書き。
-      // ON CONFLICT 句でも更新して「途中失敗 = 一部だけ古い」リスクを軽減。
-      const effectiveLastSeen = sessionId ? null /* SQL 側で datetime('now') を使う */ : (row['last_seen_at'] || null);
-      await writeDbImport.prepare(`
-        INSERT INTO properties (
-          id, site_id, site_property_id, title, property_type, status,
-          prefecture, city, address, price, price_text, area,
-          rooms, age, floor, station, station_minutes,
-          management_fee, repair_fund, direction, structure,
-          yield_rate, thumbnail_url, detail_url, description,
-          fingerprint, latitude, longitude,
-          listed_at, sold_at, last_seen_at, import_session_id,
-          created_at, updated_at, scraped_at
-        ) VALUES (
-          ?, ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?,
-          ?, ?, ?, ?,
-          ?, ?, ?, ?,
-          ?, ?, ?,
-          ?, ?, ${sessionId ? `datetime('now')` : `?`}, ?,
-          datetime('now'), datetime('now'), datetime('now')
-        )
-        ON CONFLICT(site_id, site_property_id) DO UPDATE SET
-          title             = excluded.title,
-          price             = excluded.price,
-          price_text        = excluded.price_text,
-          status            = excluded.status,
-          description       = excluded.description,
-          fingerprint       = excluded.fingerprint,
-          management_fee    = excluded.management_fee,
-          repair_fund       = excluded.repair_fund,
-          direction         = excluded.direction,
-          structure         = excluded.structure,
-          last_seen_at      = excluded.last_seen_at,
-          import_session_id = excluded.import_session_id,
-          updated_at        = datetime('now')
-      `).bind(
-        ...(sessionId ? [
-          id, siteId, sitePropertyId,
-          row['title'] || '', row['property_type'] || 'other', row['status'] || 'active',
-          row['prefecture'] || '13', row['city'] || '', row['address'] || null,
-          row['price'] ? parseInt(row['price']) : null,
-          row['price_text'] || '',
-          row['area'] ? parseFloat(row['area']) : null,
-          row['rooms'] || null,
-          row['age'] ? parseInt(row['age']) : null,
-          row['floor'] ? parseInt(row['floor']) : null,
-          row['station'] || null,
-          row['station_minutes'] ? parseInt(row['station_minutes']) : null,
-          row['management_fee'] ? parseInt(row['management_fee']) : null,
-          row['repair_fund'] ? parseInt(row['repair_fund']) : null,
-          row['direction'] || null,
-          row['structure'] || null,
-          row['yield_rate'] ? parseFloat(row['yield_rate']) : null,
-          row['thumbnail_url'] || null,
-          row['detail_url'] || '',
-          row['description'] || null,
-          row['fingerprint'] || null,
-          row['latitude'] ? parseFloat(row['latitude']) : null,
-          row['longitude'] ? parseFloat(row['longitude']) : null,
-          row['listed_at'] || null,
-          row['sold_at'] || null,
-          // last_seen_at は SQL 側で datetime('now') 固定 → bind から除外
-          sessionId,
-        ] : [
-          id, siteId, sitePropertyId,
-          row['title'] || '', row['property_type'] || 'other', row['status'] || 'active',
-          row['prefecture'] || '13', row['city'] || '', row['address'] || null,
-          row['price'] ? parseInt(row['price']) : null,
-          row['price_text'] || '',
-          row['area'] ? parseFloat(row['area']) : null,
-          row['rooms'] || null,
-          row['age'] ? parseInt(row['age']) : null,
-          row['floor'] ? parseInt(row['floor']) : null,
-          row['station'] || null,
-          row['station_minutes'] ? parseInt(row['station_minutes']) : null,
-          row['management_fee'] ? parseInt(row['management_fee']) : null,
-          row['repair_fund'] ? parseInt(row['repair_fund']) : null,
-          row['direction'] || null,
-          row['structure'] || null,
-          row['yield_rate'] ? parseFloat(row['yield_rate']) : null,
-          row['thumbnail_url'] || null,
-          row['detail_url'] || '',
-          row['description'] || null,
-          row['fingerprint'] || null,
-          row['latitude'] ? parseFloat(row['latitude']) : null,
-          row['longitude'] ? parseFloat(row['longitude']) : null,
-          row['listed_at'] || null,
-          row['sold_at'] || null,
-          effectiveLastSeen,
-          null, // import_session_id
-        ])
-      ).run();
-      importedRows++;
+      const batchResults = await writeDbImport.batch(batchSlice);
+      for (const result of batchResults) {
+        if (result.success) {
+          importedRows++;
+        } else {
+          errorRows++;
+          errors.push(`batch error at batch ${Math.floor(b / BATCH_SIZE)}`);
+        }
+      }
     } catch (e) {
-      errorRows++;
-      console.error(`[admin/import] row ${i} error:`, e);
-      errors.push(`row ${i}: import failed`);
+      // バッチ全体が失敗した場合
+      errorRows += batchSlice.length;
+      console.error(`[admin/import] batch ${Math.floor(b / BATCH_SIZE)} failed:`, e);
+      errors.push(`batch ${Math.floor(b / BATCH_SIZE)}: all ${batchSlice.length} rows failed`);
     }
   }
 
@@ -586,10 +614,12 @@ admin.post('/import', async (c) => {
   }
 
   // session 連携: categories_json に当該カテゴリの結果をマージ + total_imported を加算
+  // DB1 は 500MB 超過で書き込み不可 → writeDb (DB2) を使用
   if (sessionId) {
     try {
+      const sessionWriteDb = getWriteDB(env);
       const sess = await safeFirst<{ categories_json: string | null; total_imported: number }>(
-        env.MAL_DB.prepare(`SELECT categories_json, total_imported FROM import_sessions WHERE id=?`).bind(sessionId)
+        sessionWriteDb.prepare(`SELECT categories_json, total_imported FROM import_sessions WHERE id=?`).bind(sessionId)
       );
       if (sess) {
         let cats: Record<string, { rowCount: number; inserted?: number; skipped?: number; hitLimit: boolean }> = {};
@@ -603,7 +633,7 @@ admin.post('/import', async (c) => {
           hitLimit: hitExportLimit,
         };
         const newTotal = (sess.total_imported ?? 0) + importedRows;
-        await env.MAL_DB.prepare(`
+        await sessionWriteDb.prepare(`
           UPDATE import_sessions SET categories_json=?, total_imported=? WHERE id=?
         `).bind(JSON.stringify(cats), newTotal, sessionId).run();
       }
