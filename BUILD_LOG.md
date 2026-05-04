@@ -5,6 +5,26 @@
 
 ---
 
+## 2026-05-04 23:10 (Desktop) — デプロイ + TERASSインポート実行中
+
+- **環境**: Desktop
+- **ブランチ**: master (commit a22afee)
+- **変更内容**:
+
+### デプロイ
+- Worker `bc7b09e2` デプロイ済み（admin.ts: session→DB2固定 + D1 batch import）
+- `wrangler deploy` 成功 (932.62 KiB)
+
+### TERASSインポート
+- 649ファイル (277件の新TERASS_県名_*.csv + 旧Terass Picks) をインポート開始
+- Session ID: `8866429a-d47d-4b9c-bc06-2fa4eea4de6a`
+- 開始前: 642,570件 → インポート進行中 673,288+ 件
+- batch API(100件/バッチ)によりWorker 503タイムアウトを解消
+- **デプロイ**: 済
+- **次のタスク**: インポート完了確認・delisted検知結果確認
+
+---
+
 ## 2026-05-04 15:30 (Desktop) — クロスシャードDedup・バグ修正・スクレイパー改善
 
 - **環境**: Desktop
