@@ -851,6 +851,7 @@ admin.get('/archive/list', async (c) => {
 // ─── POST /api/admin/archive/restore ─────────────────────────────────────────
 // body: { r2Key: string } → JSONL読み込み → D1 に INSERT OR IGNORE で復元
 admin.post('/archive/restore', async (c) => {
+  const env = c.env;
   let body: { r2Key?: string };
   try {
     body = await c.req.json<{ r2Key?: string }>();
@@ -872,7 +873,9 @@ admin.post('/archive/restore', async (c) => {
     try { row = JSON.parse(line); } catch { errors++; continue; }
 
     try {
-      await c.env.MAL_DB.prepare(`
+      // R2 復元は DB2 (getWriteDB) へ書き込み (DB1 は 500MB 満杯)
+      const restoreDb = getWriteDB(env);
+      await restoreDb.prepare(`
         INSERT OR IGNORE INTO properties (
           id, site_id, site_property_id, title, property_type, status,
           prefecture, city, address, price, price_text, area,

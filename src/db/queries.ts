@@ -535,7 +535,9 @@ export async function getStatsFederated(env: Pick<Bindings, 'MAL_DB' | 'MAL_DB2'
   // (DB2 に scrape_jobs あり。aggregator が writeDb=DB2 に書くため DB2 が最新)
   const allJobs = valid.flatMap(r => r.recentJobs);
   const recentJobs = allJobs
-    .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''))
+    // D1 はスネークケースで返すため started_at で比較 (startedAt は undefined)
+    .sort((a, b) => ((b as unknown as Record<string,string>).started_at ?? b.startedAt ?? '').localeCompare(
+                    (a as unknown as Record<string,string>).started_at ?? a.startedAt ?? ''))
     .slice(0, 10);
   return { totalProperties, activeProperties, soldProperties, bysite, byPrefecture, recentJobs };
 }

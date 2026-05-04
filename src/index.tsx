@@ -4,7 +4,7 @@ import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 import { timing } from 'hono/timing';
 import type { Bindings, AppVariables } from './types';
-import { searchProperties, getPropertyById, getStats, getStatsFederated, logSearch, searchMasters, searchPropertiesFederated, getPropertyByIdFederated, getReadDBs, searchPropertiesForExport } from './db/queries';
+import { searchProperties, getPropertyById, getStats, getStatsFederated, logSearch, searchMasters, searchPropertiesFederated, getPropertyByIdFederated, getReadDBs, getWriteDB, searchPropertiesForExport } from './db/queries';
 import { aggregateSearch, runScheduledScrape } from './scrapers/aggregator';
 import { PREFECTURES, SITES } from './types';
 import { admin as adminRoutes } from './routes/admin';
@@ -521,7 +521,25 @@ const scheduled = async (event: ScheduledEvent, env: Bindings, ctx: ExecutionCon
           console.warn('[daily-cleanup] mark-delisted error:', staleErr);
         }
 
-        // 4. VACUUM on the 1st of each month (best-effort; may exceed 30s CPU limit)
+        // 4. スタックしたscrape_jobs を自動クリーンアップ (30分以上 running のまま)
+        try {
+          const writeDb = getWriteDB(env);
+          const stuckResult = await writeDb.prepare(`
+            UPDATE scrape_jobs SET status = 'failed',
+              error_message = 'timeout_cleanup: auto-failed by scheduler',
+              completed_at = datetime('now')
+            WHERE status = 'running'
+              AND started_at < datetime('now', '-30 minutes')
+          `).run();
+          const stuckCount = (stuckResult.meta?.changes as number | undefined) ?? 0;
+          if (stuckCount > 0) {
+            console.log(`[daily-cleanup] stuck-jobs-cleanup: ${stuckCount}件をfailedに更新`);
+          }
+        } catch (stuckErr) {
+          console.warn('[daily-cleanup] stuck-jobs-cleanup error:', stuckErr);
+        }
+
+        // 5. VACUUM on the 1st of each month (best-effort; may exceed 30s CPU limit)
         if (scheduledDate.getUTCDate() === 1) {
           try {
             await env.MAL_DB.exec('VACUUM');
