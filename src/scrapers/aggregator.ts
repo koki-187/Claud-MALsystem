@@ -1,6 +1,7 @@
 import type { Property, SearchParams, SiteId, SiteSearchResult, PrefectureCode } from '../types';
 import type { Bindings } from '../types';
 import { enqueueAll } from '../services/image-pipeline';
+import { getWriteDB, getReadDBs } from '../db/queries';
 import type { BaseScraper } from './base';
 import { HomesScraper } from './homes';
 import { FudosanScraper } from './fudosan';
@@ -185,6 +186,11 @@ export async function runScheduledScrape(env: Bindings, options?: {
   let total = 0, newCount = 0, updatedCount = 0, soldCount = 0;
   const errors: string[] = [];
 
+  // DB1 は size_after ~500MB で満杯。全書き込みは DB2 (getWriteDB) へ。
+  // 読み取り (existingRows 等) は両 DB を参照して重複スキップを正確に判定。
+  const writeDb = getWriteDB(env);
+  const readDbs = getReadDBs(env);
+
   for (const prefecture of targetPrefectures) {
     if (!prefecture) continue; // Sun rotation の空文字スキップ
     for (const siteId of targetSiteIds) {
@@ -193,8 +199,8 @@ export async function runScheduledScrape(env: Bindings, options?: {
 
       const jobId = `${siteId}_${prefecture}_${Date.now()}`;
       try {
-        // INSERT OR IGNORE so duplicate jobs don't fail
-        await env.MAL_DB.prepare(
+        // INSERT OR IGNORE so duplicate jobs don't fail — DB2 へ書き込み
+        await writeDb.prepare(
           `INSERT OR IGNORE INTO scrape_jobs (id, site_id, prefecture, status, started_at)
            VALUES (?, ?, ?, 'running', datetime('now'))`
         ).bind(jobId, siteId, prefecture).run();
@@ -207,7 +213,7 @@ export async function runScheduledScrape(env: Bindings, options?: {
         // ── Per-site mock guard ───────────────────────────────────────────────
         // Skip DB write only for THIS site's mock data; other sites proceed.
         if (isMockData(properties)) {
-          await env.MAL_DB.prepare(
+          await writeDb.prepare(
             `UPDATE scrape_jobs SET status = 'skipped_mock', completed_at = datetime('now') WHERE id = ?`
           ).bind(jobId).run();
           continue;
@@ -215,22 +221,23 @@ export async function runScheduledScrape(env: Bindings, options?: {
 
         let jobNew = 0, jobUpdated = 0, jobSold = 0;
 
-        // Get existing active property IDs for this site+prefecture (for new/updated counting)
-        const existingRows = await env.MAL_DB
-          .prepare(
-            `SELECT site_property_id FROM properties
-             WHERE site_id = ? AND prefecture = ? AND status = 'active'`
+        // Get existing active property IDs for this site+prefecture from ALL shards
+        // (DB1 に古いデータ、DB2 に新しいデータが混在するため両方チェック)
+        const existingResults = await Promise.all(
+          readDbs.map(db =>
+            db.prepare(
+              `SELECT site_property_id FROM properties
+               WHERE site_id = ? AND prefecture = ? AND status = 'active'`
+            ).bind(siteId, prefecture).all<{ site_property_id: string }>()
           )
-          .bind(siteId, prefecture)
-          .all<{ site_property_id: string }>();
-
+        );
         const existingSet = new Set(
-          (existingRows.results ?? []).map(r => r.site_property_id)
+          existingResults.flatMap(r => (r.results ?? []).map(row => row.site_property_id))
         );
 
         // ── Upsert scraped properties (P2 #11: バッチ化で N+1 解消) ──────────
         // 旧: 1 物件あたり 2 ラウンドトリップ × 最大 15 物件 × 9 サイト × 47 都道府県 = 12,690 順次クエリ
-        // 新: 50 件ずつまとめて env.MAL_DB.batch() に投入 → ラウンドトリップ ~1/50
+        // 新: 50 件ずつまとめて writeDb.batch() に投入 → ラウンドトリップ ~1/50
         const upsertSql = `
           INSERT INTO properties (
             id, site_id, site_property_id, title, property_type, status,
@@ -262,7 +269,7 @@ export async function runScheduledScrape(env: Bindings, options?: {
           const isNew = !existingSet.has(prop.sitePropertyId);
           if (isNew) jobNew++; else jobUpdated++;
 
-          stmts.push(env.MAL_DB.prepare(upsertSql).bind(
+          stmts.push(writeDb.prepare(upsertSql).bind(
             id, prop.siteId, prop.sitePropertyId, prop.title, prop.propertyType,
             prop.prefecture, prop.city ?? '', prop.address ?? null,
             prop.price ?? null, prop.priceText ?? '', prop.area ?? null,
@@ -274,17 +281,17 @@ export async function runScheduledScrape(env: Bindings, options?: {
             prop.fingerprint ?? null
           ));
           if (prop.price !== null) {
-            stmts.push(env.MAL_DB.prepare(priceHistorySql).bind(id, prop.price, today));
+            stmts.push(writeDb.prepare(priceHistorySql).bind(id, prop.price, today));
           }
         }
         // 50 文ずつチャンク実行 (D1 batch のオーバーヘッドを抑えつつ単発失敗の影響を局所化)
         for (let i = 0; i < stmts.length; i += 50) {
-          await env.MAL_DB.batch(stmts.slice(i, i + 50));
+          await writeDb.batch(stmts.slice(i, i + 50));
         }
 
-        // ── Mark sold: active properties not seen in the last 48 hours ────────
+        // ── Mark sold: DB2 内の active で 48h 未更新の物件を sold に ────────
         const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
-        const soldResult = await env.MAL_DB.prepare(`
+        const soldResult = await writeDb.prepare(`
           UPDATE properties
           SET status = 'sold', sold_at = datetime('now'), updated_at = datetime('now')
           WHERE site_id = ? AND prefecture = ? AND status = 'active'
@@ -292,7 +299,7 @@ export async function runScheduledScrape(env: Bindings, options?: {
         `).bind(siteId, prefecture, cutoff).run();
         jobSold = (soldResult.meta?.changes as number | undefined) ?? 0;
 
-        await env.MAL_DB.prepare(`
+        await writeDb.prepare(`
           UPDATE scrape_jobs
           SET status = 'completed',
               properties_found   = ?,
@@ -312,7 +319,7 @@ export async function runScheduledScrape(env: Bindings, options?: {
         const msg = `${siteId}/${prefecture}: ${err instanceof Error ? err.message : String(err)}`;
         errors.push(msg);
         try {
-          await env.MAL_DB.prepare(
+          await writeDb.prepare(
             `UPDATE scrape_jobs SET status = 'failed', error_message = ?, completed_at = datetime('now') WHERE id = ?`
           ).bind(msg, jobId).run();
         } catch { /* ignore secondary failure */ }

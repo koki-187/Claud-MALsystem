@@ -428,8 +428,12 @@ export async function getStatsFederated(env: Pick<Bindings, 'MAL_DB' | 'MAL_DB2'
   for (const r of valid) for (const p of r.byPrefecture) prefMap.set(p.prefecture, (prefMap.get(p.prefecture) ?? 0) + p.cnt);
   const byPrefecture = Array.from(prefMap.entries()).map(([prefecture, cnt]) => ({ prefecture, cnt }))
     .sort((a, b) => b.cnt - a.cnt).slice(0, 10);
-  // recentJobs: DB1 のジョブログを使用 (DB2 は jobs テーブルなし)
-  const recentJobs = valid[0].recentJobs;
+  // recentJobs: 全 DB のジョブを started_at 降順でマージ → 上位10件
+  // (DB2 に scrape_jobs あり。aggregator が writeDb=DB2 に書くため DB2 が最新)
+  const allJobs = valid.flatMap(r => r.recentJobs);
+  const recentJobs = allJobs
+    .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''))
+    .slice(0, 10);
   return { totalProperties, activeProperties, soldProperties, bysite, byPrefecture, recentJobs };
 }
 
