@@ -5,6 +5,57 @@
 
 ---
 
+## 2026-05-04 15:30 (Desktop) — クロスシャードDedup・バグ修正・スクレイパー改善
+
+- **環境**: Desktop
+- **ブランチ**: master (commits b58ed19, e8f6769, 8d2f3aa)
+- **変更内容**:
+
+### DB状態 (確認済み)
+- DB1 (mal-search-db): 529,457件 / 500.09MB — **完全フリーズ** (UPDATEも不可)
+- DB2 (mal-search-db-2): 110,104件 / 100MB — アクティブ
+- 合計: **639,561件** (unique active: 545,440件)
+
+### 実施した修正
+1. **クロスシャード重複解消 (dedup-cross-shard)**
+   - kenbiya 1,649件 + rakumachi 430件 = **2,079件をDB1でstatus='delisted'に更新**
+   - DB2に存在するIDをDB1でdelisted化して検索結果の重複排除
+   - `/api/admin/dedup-cross-shard` エンドポイント追加
+   
+2. **scrape_jobs表示修正**
+   - `getStats`: 7日フィルタ追加 → DB1の古いstuck jobs非表示
+   - DB1のstuck jobsはDB1 500MB超過でUPDATE不可のため、UI側フィルタで対応
+   
+3. **掲載落ち自動検知修正**
+   - scheduled mark-delisted: DB1(frozen)→ writeDb(DB2)に対象変更
+   
+4. **kenbiyaスクレイパー改善**
+   - thumbnail_url取得: `src` → `data-src` → `data-lazy-src` → `data-original` フォールバック追加
+   - DB2 kenbiyaサムネイル0.18%→次回scrapeから74%改善見込み
+
+### TERASS自動インポート状況 ⚠️
+- Task Scheduler: **TERASS_AutoImport_Daily** 毎日2:00に動作中 ✅
+- 2026-05-04 02:00 実行結果: **ABORT (zero_imports)** ← TERASSTセッション失効
+- 原因: ChromeのTERASSセッションが期限切れ → CSVダウンロードがHTMLを返す
+- **ユーザー対応が必要**:
+  ```
+  1. chrome.exe --remote-debugging-port=9222 --user-data-dir="%APPDATA%\Chrome_CDP" を起動
+  2. https://picks-agent.terass.com/search/mansion を開いてログイン
+  3. 次回2:00に自動インポートが再開する
+  ```
+
+### デプロイ
+- Version `e0c1b389` @ `https://mal-search-system.navigator-187.workers.dev`
+- 検索品質: 渋谷/東京 = 実測2,059件 (正常。旧キャッシュ73,274は期限切れで解消)
+
+### 次のタスク
+- [ ] TERASS Chrome CDPセッション再ログイン (ユーザー対応)
+- [ ] kenbiya next scrape でサムネイル収集率改善確認
+- [ ] FTS5 DB1移行 (DB3新設時に対応予定)
+- [ ] 駅・路線検索 (外部データ要)
+
+---
+
 ## 2026-05-01 02:55 (Desktop) — parseRow CSVバグ修正・デプロイ完了
 
 - **環境**: Desktop
