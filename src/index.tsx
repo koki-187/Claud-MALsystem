@@ -4,7 +4,7 @@ import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 import { timing } from 'hono/timing';
 import type { Bindings, AppVariables } from './types';
-import { searchProperties, getPropertyById, getStats, getStatsFederated, logSearch, searchMasters, searchPropertiesFederated, getPropertyByIdFederated, getReadDBs } from './db/queries';
+import { searchProperties, getPropertyById, getStats, getStatsFederated, logSearch, searchMasters, searchPropertiesFederated, getPropertyByIdFederated, getReadDBs, searchPropertiesForExport } from './db/queries';
 import { aggregateSearch, runScheduledScrape } from './scrapers/aggregator';
 import { PREFECTURES, SITES } from './types';
 import { admin as adminRoutes } from './routes/admin';
@@ -313,6 +313,140 @@ app.get('/api/transactions', async (c) => {
     return c.json({ transactions: rows.results ?? [], total: rows.results?.length ?? 0 });
   } catch {
     return c.json({ transactions: [], total: 0 });
+  }
+});
+
+// =====================
+// CSV Export
+// =====================
+app.get('/api/export/csv', async (c) => {
+  const q = c.req.query();
+  const params = {
+    query: q.q,
+    prefecture: q.prefecture as any,
+    city: q.city,
+    propertyType: q.type as any,
+    status: (q.status as any) ?? 'active',
+    priceMin: q.price_min ? parseInt(q.price_min) : undefined,
+    priceMax: q.price_max ? parseInt(q.price_max) : undefined,
+    areaMin: q.area_min ? parseFloat(q.area_min) : undefined,
+    areaMax: q.area_max ? parseFloat(q.area_max) : undefined,
+    rooms: q.rooms,
+    ageMax: q.age_max ? parseInt(q.age_max) : undefined,
+    stationMinutes: q.station_min ? parseInt(q.station_min) : undefined,
+    yieldMin: q.yield_min ? parseFloat(q.yield_min) : undefined,
+    managementFeeMax: q.management_fee_max ? parseInt(q.management_fee_max) : undefined,
+    repairFundMax: q.repair_fund_max ? parseInt(q.repair_fund_max) : undefined,
+    direction: q.direction || undefined,
+    structure: q.structure || undefined,
+    sites: q.sites ? (q.sites.split(',') as any) : undefined,
+    hideDuplicates: q.hide_duplicates === '1' ? true : (q.hide_duplicates === '0' ? false : undefined),
+    sortBy: q.sort as any,
+    limit: q.limit ? parseInt(q.limit) : 10000,
+  };
+
+  try {
+    const properties = await searchPropertiesForExport(c.env, params);
+
+    const CSV_COLUMNS = [
+      'id', 'site_id', 'title', 'property_type', 'prefecture', 'city', 'address',
+      'price', 'price_text', 'area', 'rooms', 'age', 'station', 'station_minutes',
+      'detail_url', 'status', 'scraped_at',
+    ] as const;
+
+    const escapeCell = (v: unknown): string => {
+      if (v === null || v === undefined) return '';
+      const s = String(v);
+      // RFC 4180: フィールドにカンマ・ダブルクォート・改行が含まれる場合はダブルクォートで囲む
+      if (s.includes(',') || s.includes('"') || s.includes('\n') || s.includes('\r')) {
+        return `"${s.replace(/"/g, '""')}"`;
+      }
+      return s;
+    };
+
+    const header = CSV_COLUMNS.join(',');
+    const rows = properties.map(p => [
+      p.id, p.siteId, p.title, p.propertyType, p.prefecture, p.city, p.address,
+      p.price, p.priceText, p.area, p.rooms, p.age, p.station, p.stationMinutes,
+      p.detailUrl, p.status, p.scrapedAt,
+    ].map(escapeCell).join(','));
+
+    // BOM + header + rows
+    const bom = '﻿';
+    const csv = bom + [header, ...rows].join('\r\n');
+
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    return new Response(csv, {
+      headers: {
+        'Content-Type': 'text/csv; charset=utf-8-sig',
+        'Content-Disposition': `attachment; filename="mal_export_${today}.csv"`,
+      },
+    });
+  } catch (error) {
+    console.error('[/api/export/csv] error:', error);
+    return c.json({ error: 'Export failed' }, 500);
+  }
+});
+
+// =====================
+// Saved Searches (KV)
+// =====================
+app.post('/api/saved-searches', async (c) => {
+  try {
+    const body = await c.req.json<{ name: string; params: Record<string, unknown> }>();
+    if (!body.name || typeof body.name !== 'string') {
+      return c.json({ error: 'name is required' }, 400);
+    }
+    const id = crypto.randomUUID();
+    const entry = { id, name: body.name.trim(), params: body.params ?? {}, createdAt: new Date().toISOString() };
+
+    // Save the entry
+    await c.env.MAL_CACHE.put(`saved_search:${id}`, JSON.stringify(entry));
+
+    // Update index
+    const indexRaw = await c.env.MAL_CACHE.get('saved_searches:index', 'json').catch(() => null);
+    const index: string[] = Array.isArray(indexRaw) ? (indexRaw as string[]) : [];
+    index.push(id);
+    await c.env.MAL_CACHE.put('saved_searches:index', JSON.stringify(index));
+
+    return c.json(entry, 201);
+  } catch (error) {
+    console.error('[POST /api/saved-searches] error:', error);
+    return c.json({ error: 'Failed to save search' }, 500);
+  }
+});
+
+app.get('/api/saved-searches', async (c) => {
+  try {
+    const indexRaw = await c.env.MAL_CACHE.get('saved_searches:index', 'json').catch(() => null);
+    const index: string[] = Array.isArray(indexRaw) ? (indexRaw as string[]) : [];
+
+    const entries = await Promise.all(
+      index.map(id => c.env.MAL_CACHE.get(`saved_search:${id}`, 'json').catch(() => null))
+    );
+    const searches = entries.filter(Boolean);
+    return c.json({ searches });
+  } catch (error) {
+    console.error('[GET /api/saved-searches] error:', error);
+    return c.json({ error: 'Failed to list saved searches' }, 500);
+  }
+});
+
+app.delete('/api/saved-searches/:id', async (c) => {
+  const id = c.req.param('id');
+  try {
+    await c.env.MAL_CACHE.delete(`saved_search:${id}`);
+
+    // Remove from index
+    const indexRaw = await c.env.MAL_CACHE.get('saved_searches:index', 'json').catch(() => null);
+    const index: string[] = Array.isArray(indexRaw) ? (indexRaw as string[]) : [];
+    const newIndex = index.filter(i => i !== id);
+    await c.env.MAL_CACHE.put('saved_searches:index', JSON.stringify(newIndex));
+
+    return c.json({ ok: true });
+  } catch (error) {
+    console.error('[DELETE /api/saved-searches/:id] error:', error);
+    return c.json({ error: 'Failed to delete saved search' }, 500);
   }
 });
 
@@ -1411,6 +1545,165 @@ details[open] .accordion-arrow { transform: rotate(180deg); }
 }
 .scroll-top-btn.visible { opacity: 1; pointer-events: auto; }
 .scroll-top-btn:hover { transform: translateY(-3px); }
+
+/* ==========================================
+   v6.3 — Enhanced Property Detail Modal
+   ========================================== */
+
+/* ── Image Slider ── */
+.img-slider-wrap {
+  position: relative; margin-bottom: 20px;
+  border-radius: var(--radius); overflow: hidden;
+  background: var(--c-bg2);
+}
+.img-slider-track {
+  display: flex; overflow-x: auto; scroll-snap-type: x mandatory;
+  scrollbar-width: none; -ms-overflow-style: none;
+  scroll-behavior: smooth;
+}
+.img-slider-track::-webkit-scrollbar { display: none; }
+.img-slider-slide {
+  flex: 0 0 100%; height: 320px; scroll-snap-align: start;
+  position: relative;
+}
+.img-slider-slide img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.img-slider-placeholder {
+  width: 100%; height: 320px; display: flex; align-items: center; justify-content: center;
+  font-size: 80px; background: var(--c-bg2);
+}
+.img-slider-nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 36px; height: 36px; border-radius: 50%;
+  background: rgba(0,0,0,.5); color: #fff; font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer; transition: background .15s; z-index: 5;
+  border: none;
+}
+.img-slider-nav:hover { background: rgba(0,0,0,.75); }
+.img-slider-prev { left: 10px; }
+.img-slider-next { right: 10px; }
+.img-slider-dots {
+  position: absolute; bottom: 10px; left: 0; right: 0;
+  display: flex; justify-content: center; gap: 5px;
+}
+.img-slider-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: rgba(255,255,255,.5); cursor: pointer;
+  transition: background .15s, transform .15s;
+  border: none; padding: 0;
+}
+.img-slider-dot.active { background: #fff; transform: scale(1.3); }
+.img-slider-count {
+  position: absolute; top: 10px; right: 10px;
+  background: rgba(0,0,0,.5); color: #fff;
+  font-size: 11px; font-weight: 700;
+  padding: 3px 8px; border-radius: 20px;
+}
+@media(max-width:600px) {
+  .img-slider-slide { height: 220px; }
+  .img-slider-placeholder { height: 220px; }
+}
+
+/* ── Spec Badge Row ── */
+.spec-badges {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px;
+}
+.spec-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 6px 14px; border-radius: 20px;
+  background: var(--c-bg2); border: 1.5px solid var(--c-border);
+  font-size: 13px; font-weight: 700; color: var(--c-text2);
+}
+.spec-badge i { color: var(--c-primary); font-size: 12px; }
+.spec-badge.highlight {
+  background: rgba(37,99,235,.08); border-color: rgba(37,99,235,.3);
+  color: var(--c-primary);
+}
+
+/* ── Payment Simulator ── */
+.sim-section {
+  background: var(--c-bg2); border: 1px solid var(--c-border);
+  border-radius: var(--radius); padding: 16px; margin-bottom: 20px;
+}
+.sim-title {
+  font-size: 13px; font-weight: 800; color: var(--c-text2);
+  display: flex; align-items: center; gap: 6px; margin-bottom: 0;
+  cursor: pointer; user-select: none;
+}
+.sim-title i { color: var(--c-primary); }
+.sim-toggle-icon { margin-left: auto; color: var(--c-text4); font-size: 11px; transition: transform .18s; }
+.sim-body { display: none; padding-top: 14px; }
+.sim-body.open { display: block; }
+.sim-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;
+}
+@media(max-width:480px) { .sim-grid { grid-template-columns: 1fr; } }
+.sim-field { display: flex; flex-direction: column; gap: 4px; }
+.sim-label {
+  font-size: 11px; font-weight: 700; color: var(--c-text3);
+}
+.sim-input {
+  padding: 7px 10px; border-radius: 8px;
+  border: 1.5px solid var(--c-border); background: var(--c-surface);
+  color: var(--c-text); font-size: 13px;
+  transition: border-color .15s;
+}
+.sim-input:focus { border-color: var(--c-primary); outline: none; }
+.sim-result {
+  background: var(--c-surface); border: 2px solid var(--c-primary);
+  border-radius: var(--radius-sm); padding: 14px 16px;
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+}
+.sim-result-left { flex: 1; }
+.sim-result-label { font-size: 12px; font-weight: 700; color: var(--c-text3); }
+.sim-result-value { font-size: 24px; font-weight: 900; color: var(--c-primary); }
+.sim-result-detail { font-size: 11px; color: var(--c-text4); margin-top: 2px; }
+.sim-note { font-size: 10px; color: var(--c-text4); margin-top: 8px; }
+
+/* ── Detail Table ── */
+.detail-table {
+  width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 16px;
+}
+.detail-table tr { border-bottom: 1px solid var(--c-border); }
+.detail-table tr:last-child { border-bottom: none; }
+.detail-table th {
+  width: 36%; padding: 8px 12px; background: var(--c-bg2);
+  font-size: 11px; font-weight: 700; color: var(--c-text3);
+  text-align: left; vertical-align: top;
+}
+.detail-table td {
+  padding: 8px 12px; color: var(--c-text); vertical-align: top;
+  word-break: break-all;
+}
+
+/* ── Modal Actions ── */
+.modal-actions {
+  display: flex; gap: 10px; margin-top: 4px; flex-wrap: wrap;
+}
+.btn-map {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 12px 18px; border-radius: 10px;
+  background: var(--c-bg2); border: 1.5px solid var(--c-border);
+  color: var(--c-text2); font-size: 14px; font-weight: 700;
+  cursor: pointer; transition: all .18s; text-decoration: none;
+  flex-shrink: 0;
+}
+.btn-map:hover { border-color: var(--c-primary); color: var(--c-primary); background: rgba(37,99,235,.06); }
+
+/* ── Header favorites badge ── */
+.fav-header-btn { position: relative; }
+.fav-count-badge {
+  position: absolute; top: -4px; right: -4px;
+  background: #e11d48; color: #fff;
+  font-size: 9px; font-weight: 800;
+  min-width: 16px; height: 16px; border-radius: 8px;
+  padding: 0 3px;
+  display: none; align-items: center; justify-content: center;
+  line-height: 1;
+}
+.fav-count-badge.visible { display: flex; }
 
   </style>
 </head>

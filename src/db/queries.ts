@@ -99,6 +99,109 @@ export async function getPropertyByIdFederated(
   return results.find(Boolean) ?? null;
 }
 
+/**
+ * CSV エクスポート用: 全 DB を並列検索して最大 maxRows 件を返す (ページネーションなし)。
+ * searchProperties の 100 件上限を回避するため専用関数として実装。
+ */
+export async function searchPropertiesForExport(
+  env: Pick<Bindings, 'MAL_DB' | 'MAL_DB2'>,
+  params: SearchParams,
+  maxRows = 10000,
+): Promise<Property[]> {
+  const dbs = getReadDBs(env);
+  const allResults = await Promise.all(
+    dbs.map(db => searchPropertiesLarge(db, params, maxRows).catch(() => [] as Property[]))
+  );
+  const merged = sortProperties(allResults.flat(), params.sortBy);
+  return merged.slice(0, maxRows);
+}
+
+/** searchProperties と同ロジックだが limit を maxRows まで許容する内部関数 */
+async function searchPropertiesLarge(
+  db: D1Database,
+  params: SearchParams,
+  maxRows: number,
+): Promise<Property[]> {
+  const limit = Math.min(params.limit ?? maxRows, maxRows);
+  const whereClauses: string[] = [];
+  const bindings: (string | number)[] = [];
+
+  const statusFilter = params.status === 'all' ? undefined : (params.status ?? 'active');
+  if (statusFilter) { whereClauses.push('p.status = ?'); bindings.push(statusFilter); }
+  if (params.prefecture) { whereClauses.push('p.prefecture = ?'); bindings.push(params.prefecture); }
+  if (params.city) { whereClauses.push('p.city LIKE ?'); bindings.push(`%${params.city}%`); }
+  if (params.propertyType) { whereClauses.push('p.property_type = ?'); bindings.push(params.propertyType); }
+  if (params.priceMin !== undefined) { whereClauses.push('p.price >= ?'); bindings.push(params.priceMin); }
+  if (params.priceMax !== undefined) { whereClauses.push('p.price <= ?'); bindings.push(params.priceMax); }
+  if (params.areaMin !== undefined) { whereClauses.push('p.area >= ?'); bindings.push(params.areaMin); }
+  if (params.areaMax !== undefined) { whereClauses.push('p.area <= ?'); bindings.push(params.areaMax); }
+  if (params.rooms) {
+    const roomList = params.rooms.split(',').map(r => r.trim()).filter(Boolean);
+    if (roomList.length === 1) { whereClauses.push('p.rooms = ?'); bindings.push(roomList[0]); }
+    else if (roomList.length > 1) {
+      whereClauses.push(`p.rooms IN (${roomList.map(() => '?').join(',')})`);
+      bindings.push(...roomList);
+    }
+  }
+  if (params.ageMax !== undefined) { whereClauses.push('(p.age IS NULL OR p.age <= ?)'); bindings.push(params.ageMax); }
+  if (params.stationMinutes !== undefined) { whereClauses.push('(p.station_minutes IS NULL OR p.station_minutes <= ?)'); bindings.push(params.stationMinutes); }
+  if (params.managementFeeMax !== undefined) { whereClauses.push('(p.management_fee IS NULL OR p.management_fee <= ?)'); bindings.push(params.managementFeeMax); }
+  if (params.repairFundMax !== undefined) { whereClauses.push('(p.repair_fund IS NULL OR p.repair_fund <= ?)'); bindings.push(params.repairFundMax); }
+  if (params.direction) { whereClauses.push('p.direction LIKE ?'); bindings.push(`%${params.direction}%`); }
+  if (params.structure) { whereClauses.push('p.structure LIKE ?'); bindings.push(`%${params.structure}%`); }
+  if (params.yieldMin !== undefined) { whereClauses.push('p.yield_rate >= ?'); bindings.push(params.yieldMin); }
+  if (params.sites && params.sites.length > 0) {
+    whereClauses.push(`p.site_id IN (${params.sites.map(() => '?').join(', ')})`);
+    bindings.push(...params.sites);
+  }
+  if (params.query) {
+    const ftsTokens = params.query.trim().replace(/["\(\)\[\]{}^*?]/g, ' ').split(/[\s　]+/).filter(Boolean);
+    if (ftsTokens.length > 0) {
+      whereClauses.push(`p.rowid IN (SELECT rowid FROM properties_fts WHERE properties_fts MATCH ? LIMIT 50000)`);
+      bindings.push(ftsTokens.map(t => `"${t}"`).join(' '));
+    }
+  }
+  const hideDups = params.hideDuplicates ?? true;
+  if (hideDups) whereClauses.push('p.is_dedup_primary = 1');
+
+  const whereSQL = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+  const sortMap: Record<string, string> = {
+    price_asc: 'p.price ASC NULLS LAST', price_desc: 'p.price DESC NULLS LAST',
+    area_asc: 'p.area ASC NULLS LAST', area_desc: 'p.area DESC NULLS LAST',
+    yield_desc: 'p.yield_rate DESC NULLS LAST', newest: 'p.scraped_at DESC', relevance: 'p.scraped_at DESC',
+  };
+  const orderSQL = sortMap[params.sortBy ?? 'newest'] ?? 'p.scraped_at DESC';
+
+  try {
+    const rows = await db
+      .prepare(`SELECT p.* FROM properties p ${whereSQL} ORDER BY ${orderSQL} LIMIT ?`)
+      .bind(...bindings, limit)
+      .all<Record<string, unknown>>();
+    return (rows.results ?? []).map(rowToProperty);
+  } catch (err: unknown) {
+    const msg = String((err as Error)?.message ?? err);
+    if (params.query && (msg.includes('no such table') || msg.includes('properties_fts'))) {
+      // FTS5 フォールバック
+      const fallbackClauses = whereClauses.filter(c => !c.includes('properties_fts'));
+      const ftsIdx = whereClauses.findIndex(c => c.includes('properties_fts'));
+      const fallbackBindings = bindings.filter((_, i) => ftsIdx < 0 || i !== ftsIdx);
+      const likeTokens = params.query.trim().split(/[\s　]+/).filter(Boolean);
+      const likeConditions = likeTokens.map(() => '(p.title LIKE ? OR p.address LIKE ? OR p.description LIKE ?)').join(' AND ');
+      if (likeConditions) {
+        fallbackClauses.push(`(${likeConditions})`);
+        for (const t of likeTokens) fallbackBindings.push(`%${t}%`, `%${t}%`, `%${t}%`);
+      }
+      const fallbackWhereSQL = fallbackClauses.length > 0 ? `WHERE ${fallbackClauses.join(' AND ')}` : '';
+      const rows = await db
+        .prepare(`SELECT p.* FROM properties p ${fallbackWhereSQL} ORDER BY ${orderSQL} LIMIT ?`)
+        .bind(...fallbackBindings, limit)
+        .all<Record<string, unknown>>();
+      return (rows.results ?? []).map(rowToProperty);
+    }
+    throw err;
+  }
+}
+
 export async function searchProperties(
   db: D1Database,
   params: SearchParams
