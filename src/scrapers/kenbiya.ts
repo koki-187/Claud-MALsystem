@@ -168,9 +168,15 @@ export class KenbiyaScraper extends BaseScraper {
     const floor = floorMatch ? parseInt(floorMatch[1]) : null;
     const totalFloors = floorMatch ? parseInt(floorMatch[2]) : null;
 
-    // Image
-    const imgEl = li.querySelector('.photo img:last-child') ?? li.querySelector('img');
-    const thumbnailUrl = imgEl?.getAttribute('src') ?? null;
+    // Image — kenbiyaは遅延ロード(data-src / data-lazy-src)を使う場合があるため全属性を確認
+    const imgEl = li.querySelector('.photo img:last-child')
+      ?? li.querySelector('.photo img')
+      ?? li.querySelector('img');
+    const thumbnailUrl = imgEl?.getAttribute('src')
+      ?? imgEl?.getAttribute('data-src')
+      ?? imgEl?.getAttribute('data-lazy-src')
+      ?? imgEl?.getAttribute('data-original')
+      ?? null;
     const images = thumbnailUrl ? [thumbnailUrl] : [];
 
     const cardText = li.textContent ?? '';
@@ -233,9 +239,13 @@ export class KenbiyaScraper extends BaseScraper {
     const city = addrText.match(/([^\s　]+[市区町村])/)?.[1] ?? '';
     const { station, stationMinutes } = this.extractStation(stationText);
 
-    // Image
-    const imgEl = item.querySelector('.photo .image') ?? item.querySelector('img');
-    const thumbnailUrl = imgEl?.getAttribute('src') ?? null;
+    // Image — PRアイテムも data-src フォールバックを追加
+    const imgEl = item.querySelector('.photo .image') ?? item.querySelector('.photo img') ?? item.querySelector('img');
+    const thumbnailUrl = imgEl?.getAttribute('src')
+      ?? imgEl?.getAttribute('data-src')
+      ?? imgEl?.getAttribute('data-lazy-src')
+      ?? imgEl?.getAttribute('data-original')
+      ?? null;
     const images = thumbnailUrl ? [thumbnailUrl] : [];
 
     const fingerprint = this.computeFingerprint({ prefecture, city, price, area: null, rooms: null });
