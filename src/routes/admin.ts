@@ -1207,4 +1207,49 @@ admin.post('/master/:id/favorite', async (c) => {
   return c.json({ ok: true, id, favorite: body.favorite });
 });
 
+// ─── POST /api/admin/dedup-cross-shard ────────────────────────────────────────
+// DB2 に存在する site_property_id のレコードを DB1 で status='delisted' に更新する。
+// body: { site_id: 'kenbiya'|'rakumachi', offset: number, limit: number }
+admin.post('/dedup-cross-shard', async (c) => {
+  let body: { site_id?: string; offset?: number; limit?: number };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'JSON body required' }, 400);
+  }
+
+  const { site_id, offset = 0, limit = 100 } = body;
+  if (!site_id || !['kenbiya', 'rakumachi'].includes(site_id)) {
+    return c.json({ error: 'site_id must be kenbiya or rakumachi' }, 400);
+  }
+
+  // DB2 から site_property_id を取得
+  const db2Rows = await c.env.MAL_DB2.prepare(
+    `SELECT site_property_id FROM properties WHERE site_id = ? ORDER BY site_property_id LIMIT ? OFFSET ?`
+  ).bind(site_id, limit, offset).all<{ site_property_id: string }>();
+
+  const ids = db2Rows.results.map(r => r.site_property_id);
+  if (ids.length === 0) {
+    return c.json({ ok: true, site_id, offset, fetched: 0, changed: 0, done: true });
+  }
+
+  // DB1 を 1 件ずつ UPDATE（IN句は容量上限エラーを起こすため）
+  let changed = 0;
+  for (const id of ids) {
+    const r = await c.env.MAL_DB.prepare(
+      `UPDATE properties SET status='delisted', updated_at=datetime('now') WHERE site_id=? AND status='active' AND site_property_id=?`
+    ).bind(site_id, id).run();
+    changed += (r.meta?.changes as number | undefined) ?? 0;
+  }
+
+  return c.json({
+    ok: true,
+    site_id,
+    offset,
+    fetched: ids.length,
+    changed,
+    done: ids.length < limit,
+  });
+});
+
 export { admin };
